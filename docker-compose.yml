@@ -1,0 +1,202 @@
+name: datastack
+
+services:
+  orders-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5433:5432"
+    volumes:
+      - orders_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d orders"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - datastack
+
+  crm-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crm
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5434:5432"
+    volumes:
+      - crm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - datastack
+
+  inventory-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: inventory
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5435:5432"
+    volumes:
+      - inventory_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - datastack
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    networks:
+      - datastack
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.15.0
+    command: ["-varz", "http://nats:8222"]
+    ports:
+      - "7777:7777"
+    depends_on:
+      - nats
+    networks:
+      - datastack
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_DB: analytics
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+      - "9363:9363"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./observability/clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - datastack
+
+  ollama:
+    image: ollama/ollama:0.3.12
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - datastack
+
+  metabase:
+    image: metabase/metabase:v0.50.26
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+    ports:
+      - "3000:3000"
+    volumes:
+      - metabase_data:/metabase-data
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - datastack
+
+  orders-postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://demo:demo@orders-postgres:5432/orders?sslmode=disable
+    depends_on:
+      orders-postgres:
+        condition: service_healthy
+    networks:
+      - datastack
+
+  crm-postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://demo:demo@crm-postgres:5432/crm?sslmode=disable
+    depends_on:
+      crm-postgres:
+        condition: service_healthy
+    networks:
+      - datastack
+
+  inventory-postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://demo:demo@inventory-postgres:5432/inventory?sslmode=disable
+    depends_on:
+      inventory-postgres:
+        condition: service_healthy
+    networks:
+      - datastack
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - nats-exporter
+      - orders-postgres-exporter
+      - crm-postgres-exporter
+      - inventory-postgres-exporter
+      - clickhouse
+    networks:
+      - datastack
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - clickhouse
+    networks:
+      - datastack
+
+networks:
+  datastack:
+    driver: bridge
+
+volumes:
+  orders_postgres_data:
+  crm_postgres_data:
+  inventory_postgres_data:
+  clickhouse_data:
+  ollama_data:
+  metabase_data:
+  prometheus_data:
+  grafana_data:
