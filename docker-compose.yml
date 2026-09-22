@@ -1,63 +1,22 @@
 name: datastack
 
 services:
-  orders-postgres:
-    image: postgres:16-alpine
-    mem_limit: 768m
-    memswap_limit: 768m
-    cpus: 0.75
+  postgres:
+    image: postgres:18-alpine
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.00
     environment:
-      POSTGRES_DB: orders
+      POSTGRES_DB: datastack
       POSTGRES_USER: demo
       POSTGRES_PASSWORD: demo
     ports:
       - "5433:5432"
     volumes:
-      - orders_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo -d orders"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    networks:
-      - datastack
-
-  crm-postgres:
-    image: postgres:16-alpine
-    mem_limit: 768m
-    memswap_limit: 768m
-    cpus: 0.75
-    environment:
-      POSTGRES_DB: crm
-      POSTGRES_USER: demo
-      POSTGRES_PASSWORD: demo
-    ports:
-      - "5434:5432"
-    volumes:
-      - crm_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo -d crm"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    networks:
-      - datastack
-
-  inventory-postgres:
-    image: postgres:16-alpine
-    mem_limit: 768m
-    memswap_limit: 768m
-    cpus: 0.75
-    environment:
-      POSTGRES_DB: inventory
-      POSTGRES_USER: demo
-      POSTGRES_PASSWORD: demo
-    ports:
-      - "5435:5432"
-    volumes:
-      - inventory_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo -d inventory"]
+      test: ["CMD-SHELL", "pg_isready -U demo -d datastack"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -114,18 +73,6 @@ services:
     networks:
       - datastack
 
-  ollama:
-    image: ollama/ollama:0.3.12
-    mem_limit: 6g
-    memswap_limit: 6g
-    cpus: 3.00
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - datastack
-
   metabase:
     image: metabase/metabase:v0.50.26
     mem_limit: 2g
@@ -143,41 +90,16 @@ services:
     networks:
       - datastack
 
-  orders-postgres-exporter:
+  postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     mem_limit: 128m
     memswap_limit: 128m
     cpus: 0.20
     environment:
-      DATA_SOURCE_NAME: postgresql://demo:demo@orders-postgres:5432/orders?sslmode=disable
+      DATA_SOURCE_NAME: postgresql://demo:demo@postgres:5432/postgres?sslmode=disable
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: true
     depends_on:
-      orders-postgres:
-        condition: service_healthy
-    networks:
-      - datastack
-
-  crm-postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.20
-    environment:
-      DATA_SOURCE_NAME: postgresql://demo:demo@crm-postgres:5432/crm?sslmode=disable
-    depends_on:
-      crm-postgres:
-        condition: service_healthy
-    networks:
-      - datastack
-
-  inventory-postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.20
-    environment:
-      DATA_SOURCE_NAME: postgresql://demo:demo@inventory-postgres:5432/inventory?sslmode=disable
-    depends_on:
-      inventory-postgres:
+      postgres:
         condition: service_healthy
     networks:
       - datastack
@@ -198,9 +120,7 @@ services:
       - prometheus_data:/prometheus
     depends_on:
       - nats-exporter
-      - orders-postgres-exporter
-      - crm-postgres-exporter
-      - inventory-postgres-exporter
+      - postgres-exporter
       - clickhouse
     networks:
       - datastack
@@ -231,11 +151,8 @@ networks:
     driver: bridge
 
 volumes:
-  orders_postgres_data:
-  crm_postgres_data:
-  inventory_postgres_data:
+  postgres_data:
   clickhouse_data:
-  ollama_data:
   metabase_data:
   prometheus_data:
   grafana_data:

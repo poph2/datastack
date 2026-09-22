@@ -1,0 +1,3 @@
+CREATE DATABASE orders OWNER demo;
+CREATE DATABASE crm OWNER demo;
+CREATE DATABASE inventory OWNER demo;

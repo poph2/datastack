@@ -16,17 +16,9 @@ scrape_configs:
   - job_name: postgres
     static_configs:
       - targets:
-          - orders-postgres-exporter:9187
+          - postgres-exporter:9187
         labels:
-          source: orders
-      - targets:
-          - crm-postgres-exporter:9187
-        labels:
-          source: crm
-      - targets:
-          - inventory-postgres-exporter:9187
-        labels:
-          source: inventory
+          source: postgres
 
   - job_name: clickhouse
     static_configs:
