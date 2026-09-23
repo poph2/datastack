@@ -49,6 +49,8 @@ Key constraints:
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+Not pictured above for space: the Orchestrator also sends `ProcessPaymentCmd` directly to the Invoicing microservice (independent of the Sales → `OrderCreatedEvent` path) to drive payment settlement/failure scenarios.
+
 Each domain connects to its own dedicated Postgres database and runs its own migration logic at boot:
 
 **Customer microservice (`db_customers`)**
@@ -79,8 +81,8 @@ Each domain connects to its own dedicated Postgres database and runs its own mig
 
 - Startup: connects to `db_invoicing`, runs GORM `AutoMigrate` for the `invoices` table.
 - Role: handles financial ledger entries and billing.
-- Input: `OrderCreatedEvent` from the Sales microservice.
-- Behavior: processes the event asynchronously, generates an invoice record with a payment status stamped with the event's simulated date.
+- Input: `OrderCreatedEvent` from the Sales microservice, and `ProcessPaymentCmd` sent directly by the Orchestrator (payment settlement/failure events, independent of order creation).
+- Behavior: processes both asynchronously, generates or updates an invoice record with a payment status stamped with the simulated date.
 - Output: none (terminal write service).
 
 ## 3. Data Storage And Schema Design
@@ -163,12 +165,14 @@ All inter-service communication is non-blocking and memory-resident, over typed 
 [Orchestrator] --CreateCustomerCmd--> [Customer Service]
 [Orchestrator] --RestockInventoryCmd--> [Inventory Service]
 [Orchestrator] --CreateSaleCmd--> [Sales Service] --OrderCreatedEvent--> [Invoicing Service]
+[Orchestrator] --ProcessPaymentCmd--> [Invoicing Service]
 ```
 
 - **`CreateCustomerCmd`** — `FullName` (string), `Email` (string), `Created` (simulated time). Producer: Orchestrator. Consumer: Customer.
 - **`RestockInventoryCmd`** — `SKU` (string), `ProductName` (string), `Quantity` (int), `UnitPrice` (float), `Created` (simulated time). Producer: Orchestrator. Consumer: Inventory.
 - **`CreateSaleCmd`** — `CustomerID` (string), `SKU` (string), `Quantity` (int), `Created` (simulated time). Producer: Orchestrator. Consumer: Sales.
 - **`OrderCreatedEvent`** — `OrderID` (string), `CustomerID` (string), `SKU` (string), `Amount` (float), `Quantity` (int), `Created` (simulated time). Producer: Sales. Consumer: Invoicing.
+- **`ProcessPaymentCmd`** — `OrderID` (string), `PaymentStatus` (string: `PAID` or `FAILED`), `Amount` (float), `Created` (simulated time). Producer: Orchestrator. Consumer: Invoicing. Drives the "a payment fails" demo scenario independently of order creation.
 
 ## 6. Observability And Telemetry Specification
 

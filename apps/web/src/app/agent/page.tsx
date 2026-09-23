@@ -114,8 +114,7 @@ export default function AgentPage() {
 
         <div className="flex h-[550px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-center dark:border-zinc-700 dark:bg-zinc-900 lg:col-span-2">
           <p className="px-6 text-sm text-zinc-400 dark:text-zinc-500">
-            Dashboards and charts the agent creates in Metabase will render
-            here.
+            Dashboards and charts the agent creates will render here.
           </p>
         </div>
       </div>

@@ -11,7 +11,7 @@ DataStack is a demo project for the Data Engineering Things Summit. It demonstra
 3. Custom Go applications ingest that data into an analytical database.
 4. ClickHouse is the first analytical database target.
 5. Ollama powers a reasoning agent that can answer questions over the analytical data.
-6. The agent can run read-oriented SQL against ClickHouse and create Metabase assets.
+6. The agent can run read-oriented SQL against ClickHouse.
 7. Prometheus and Grafana expose operational and analytical observability across services, databases, and pipelines.
 8. A Next.js UI presents the system as a polished founder-demo style product.
 
@@ -27,12 +27,11 @@ DataStack is a demo project for the Data Engineering Things Summit. It demonstra
 - Historical backfill: on startup the Orchestrator fast-forwards simulated time from January 1st of the current year to now at 1 simulated day per real-time second, then switches to a 250ms real-time tick.
 - Ingestion mode for the first version: polling by `updated_at` watermarks.
 - Local runtime: Docker Compose first.
-- Go layout: one Go workspace with multiple services.
-- First backend shape: one Go backend binary initially, with clear internal boundaries for ingestion control and agent behavior.
+- Go layout: one Go workspace, one Go binary. It contains the Orchestrator Engine, the four domain microservices, the ingestion worker, the control API, and the agent package, all in a single process.
+- First backend shape: clear internal package boundaries for the orchestrator, microservices, ingestion, control, and agent behavior, even though they all ship in one binary.
 - API style: REST JSON.
 - Next.js app location: `apps/web`.
 - Next.js package manager: npm.
-- Metabase setup: fully automated through Compose and setup code where practical.
 - Local Ollama model: `qwen2.5-coder`.
 - Ollama model startup: document the manual model pull instead of pulling automatically in Compose.
 - First analytical emphasis: revenue and fulfillment.
@@ -45,40 +44,42 @@ DataStack is a demo project for the Data Engineering Things Summit. It demonstra
 - Agent capabilities:
   - Generate SQL from natural-language questions.
   - Execute safe analytical queries against ClickHouse.
-  - Create Metabase cards or dashboards from user intent.
 - UI direction: polished founder demo, but still useful as an operator console.
 
 ## Intended Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Binary[Single Go orchestrator binary]
-    Orchestrator[Orchestrator Engine] -- CreateCustomerCmd --> CustomerSvc[Customer microservice]
-    Orchestrator -- RestockInventoryCmd --> InventorySvc[Inventory microservice]
-    Orchestrator -- CreateSaleCmd --> SalesSvc[Sales microservice]
-    SalesSvc -- OrderCreatedEvent --> InvoicingSvc[Invoicing microservice]
-  end
+  Orchestrator[Orchestrator Engine] -- CreateCustomerCmd --> CustomerSvc[Customer microservice]
+  Orchestrator -- RestockInventoryCmd --> InventorySvc[Inventory microservice]
+  Orchestrator -- CreateSaleCmd --> SalesSvc[Sales microservice]
+  Orchestrator -- ProcessPaymentCmd --> InvoicingSvc[Invoicing microservice]
+  SalesSvc -- OrderCreatedEvent --> InvoicingSvc
   CustomerSvc --> CustomerDB[(db_customers)]
   InventorySvc --> InventoryDB[(db_inventory)]
   SalesSvc --> SalesDB[(db_sales)]
   InvoicingSvc --> InvoicingDB[(db_invoicing)]
-  CustomerDB --> Ingestor[Go ingestion worker]
+  Ingestor[Go ingestion worker] --> ControlAPI[Go control API]
+  ControlAPI --> Agent[Go agent package]
+  ControlAPI --> Orchestrator
+  CustomerDB --> Ingestor
   InventoryDB --> Ingestor
   SalesDB --> Ingestor
   InvoicingDB --> Ingestor
   Ingestor --> ClickHouse[(ClickHouse analytics)]
-  ControlAPI[Go control API] --> Ingestor
   UI[Next.js UI] --> ControlAPI
-  UI --> Agent[Go agent service]
+  UI --> Agent
   Agent --> Ollama[Ollama]
   Agent --> ClickHouse
-  Agent --> Metabase[Metabase]
-  Metabase --> ClickHouse
 ```
+
+All of the above (Orchestrator, microservices, ingestion worker, control API, agent package) ship as **one single Go binary**. Only the Postgres databases, ClickHouse, Ollama, and the Next.js UI are separate processes.
 
 ## Microservice Communication Model
 
-The Orchestrator and all four domain microservices run inside **one Go binary**, as goroutines communicating over **strongly-typed, in-memory Go channels** — no message broker, no HTTP hop between them. See [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec (domain lifecycle, schemas, backfill algorithm, message payloads, telemetry).
+The Orchestrator and all four domain microservices communicate over **strongly-typed, in-memory Go channels** — no message broker, no HTTP hop between them. The Orchestrator sends `ProcessPaymentCmd` directly to the Invoicing microservice (payment settlement events) in addition to Sales's `OrderCreatedEvent`. See [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec (domain lifecycle, schemas, backfill algorithm, message payloads, telemetry).
+
+The ingestion worker, control API, and agent package are internal packages of the same binary, calling each other directly in-process. The control API starts/stops the Orchestrator with a plain in-process function call — there is no network hop anywhere in this subsystem.
 
 Why this shape:
 
@@ -134,7 +135,9 @@ Grafana should answer operational questions such as:
 
 ## Applications To Build
 
-### Go Orchestrated Data Engine (single binary)
+All of the following ship as internal packages of **one single Go binary** (see the Intended Architecture diagram above).
+
+### Go Orchestrated Data Engine
 
 Responsible for driving realistic cross-domain business activity. See [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec (domain lifecycle, schemas, backfill algorithm, message payloads, telemetry, connection pooling).
 
@@ -170,7 +173,7 @@ Expected first-version behavior:
 
 ### Go Backend API
 
-Responsible for exposing pipeline and agent behavior to the UI. Start as one Go binary with clear internal packages. Split into separate binaries later only when the working demo needs it.
+Responsible for exposing pipeline and agent behavior to the UI. It is one internal package of the single Go binary, with clear boundaries from the orchestrator, microservices, ingestion worker, and agent packages.
 
 Expected first-version behavior:
 
@@ -190,9 +193,8 @@ Expected first-version behavior:
 - Talk to Ollama for reasoning and SQL generation.
 - Restrict generated SQL to safe analytical queries by default.
 - Execute ClickHouse queries and return tabular results.
-- Create Metabase dashboard assets when explicitly requested by the UI or API caller.
 - Return generated SQL alongside answers so the demo is transparent.
-- Expose Prometheus metrics for questions asked, SQL generated, query duration, query failures, and Metabase asset creation.
+- Expose Prometheus metrics for questions asked, SQL generated, query duration, and query failures.
 
 ### Next.js UI
 
@@ -205,7 +207,6 @@ Expected first-version views:
 - Pipeline status for Orders, CRM, and Inventory sources.
 - Chat interface for asking questions about the data.
 - Query result viewer that shows generated SQL and returned rows.
-- Dashboard builder flow for creating Metabase assets.
 - Observability links or embedded views for Prometheus/Grafana status where helpful.
 
 Design direction:
@@ -255,7 +256,6 @@ ClickHouse tables should be shaped for analytical questions such as:
 - The data agent must default to read-only SQL execution.
 - Any SQL generation should be constrained to known analytical schemas.
 - Do not allow destructive SQL from natural-language prompts.
-- Metabase asset creation is allowed, but it should be explicit and visible to the user.
 - Return generated SQL to the UI/API caller for transparency.
 
 ## Open Questions
@@ -265,7 +265,7 @@ These decisions are not final yet:
 - The exact visual identity of the Next.js UI.
 - Exact ClickHouse schema shape for revenue and fulfillment analytics.
 - Exact API contract between the Next.js UI and Go services.
-- Exact boundaries between Go internal packages in the first backend binary.
+- Exact boundaries between Go internal packages in the single binary.
 
 ## Recommended Next Step
 
@@ -277,12 +277,9 @@ Start by creating a minimal Docker Compose stack with:
 - Invoicing Postgres (`db_invoicing`).
 - ClickHouse.
 - Ollama.
-- Metabase.
 - Prometheus.
 - Grafana.
-- Go orchestrated data engine (single binary: Orchestrator Engine + four domain microservices).
-- Go ingestion worker.
-- Go backend API with ingestion control and agent packages.
+- Go orchestrated data engine (single binary: Orchestrator Engine + four domain microservices, ingestion worker, control API, and agent package).
 - Next.js UI in `apps/web`.
 
-Then seed the Postgres databases with a small dataset and prove one end-to-end path: source row to ClickHouse row to agent answer to Metabase dashboard.
+Then seed the Postgres databases with a small dataset and prove one end-to-end path: source row to ClickHouse row to agent answer.
