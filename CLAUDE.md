@@ -9,16 +9,16 @@ DataStack is a demo project for the Data Engineering Things Summit. It demonstra
 1. Multiple operational Postgres databases produce source data.
 2. A single Go orchestrator binary simulates a realistic e-commerce business: an Orchestrator Engine drives four in-process domain microservices (Customer, Inventory, Sales, Invoicing) over in-memory Go channels, and each microservice writes directly into its own Postgres database.
 3. Custom Go applications ingest that data into an analytical database.
-4. ClickHouse is the first analytical database target.
+4. StarRocks is the analytical database target.
 5. Ollama powers a reasoning agent that can answer questions over the analytical data.
-6. The agent can run read-oriented SQL against ClickHouse.
+6. The agent can run read-oriented SQL against StarRocks.
 7. Prometheus and Grafana expose operational and analytical observability across services, databases, and pipelines.
 8. A Next.js UI presents the system as a polished founder-demo style product.
 
 ## Current Product Direction
 
 - Project name: DataStack.
-- First analytical database: ClickHouse.
+- Analytical database: StarRocks.
 - Source systems to simulate first: Customer, Inventory, Sales, and Invoicing Postgres databases (see [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec).
 - Source traffic: a single Go binary ("orchestrated data engine") running an Orchestrator Engine plus four domain microservices as goroutines, communicating exclusively over in-memory Go channels — no message broker, no network hop between them.
 - Simulator coordination model: in-process command/event channels only. Each domain microservice owns its own Postgres database and connection pool; the Orchestrator never touches schema or writes to a database directly.
@@ -37,13 +37,13 @@ DataStack is a demo project for the Data Engineering Things Summit. It demonstra
 - First analytical emphasis: revenue and fulfillment.
 - First UI screen: live command center.
 - Observability stack: Prometheus for metrics collection and Grafana for dashboards.
-- Metrics coverage: Go microservices, Postgres databases, the orchestrator's simulated clock and state cache, ClickHouse, ingestion progress, agent activity, and demo business throughput.
+- Metrics coverage: Go microservices, Postgres databases, the orchestrator's simulated clock and state cache, StarRocks, ingestion progress, agent activity, and demo business throughput.
 - Primary implementation languages:
   - Go for backend applications and pipeline services.
   - Next.js for the UI.
 - Agent capabilities:
   - Generate SQL from natural-language questions.
-  - Execute safe analytical queries against ClickHouse.
+  - Execute safe analytical queries against StarRocks.
 - UI direction: polished founder demo, but still useful as an operator console.
 
 ## Intended Architecture
@@ -66,14 +66,14 @@ flowchart LR
   InventoryDB --> Ingestor
   SalesDB --> Ingestor
   InvoicingDB --> Ingestor
-  Ingestor --> ClickHouse[(ClickHouse analytics)]
+  Ingestor --> StarRocks[(StarRocks analytics)]
   UI[Next.js UI] --> ControlAPI
   UI --> Agent
   Agent --> Ollama[Ollama]
-  Agent --> ClickHouse
+  Agent --> StarRocks
 ```
 
-All of the above (Orchestrator, microservices, ingestion worker, control API, agent package) ship as **one single Go binary**. Only the Postgres databases, ClickHouse, Ollama, and the Next.js UI are separate processes.
+All of the above (Orchestrator, microservices, ingestion worker, control API, agent package) ship as **one single Go binary**. Only the Postgres databases, StarRocks, Ollama, and the Next.js UI are separate processes.
 
 ## Microservice Communication Model
 
@@ -100,9 +100,9 @@ Recommended approach:
 - Add Grafana to Docker Compose with provisioned datasources and starter dashboards.
 - Every Go service should expose a `/metrics` endpoint using Prometheus-compatible metrics.
 - Use Postgres exporters for the Customer, Inventory, Sales, and Invoicing Postgres databases.
-- Use ClickHouse metrics or a ClickHouse exporter so Prometheus can observe analytical database health and query activity.
+- Use StarRocks metrics (its FE/BE Prometheus-format `/metrics` endpoints) so Prometheus can observe analytical database health and query activity.
 - Grafana should use Prometheus for infrastructure and service metrics.
-- Grafana may also use ClickHouse directly as a datasource for business analytics dashboards when useful.
+- Grafana may also use StarRocks directly (via its MySQL datasource) for business analytics dashboards when useful.
 
 Important metrics to expose from Go services:
 
@@ -111,7 +111,7 @@ Important metrics to expose from Go services:
 - Rows written by microservice, table, and source domain.
 - Ingestion rows loaded by source table.
 - Ingestion lag by source table and watermark.
-- ClickHouse insert duration and failures.
+- StarRocks insert duration and failures.
 - Agent questions asked, SQL generation failures, query duration, and dashboard creation attempts.
 - HTTP request counts, latency, and errors for REST APIs.
 
@@ -121,15 +121,15 @@ Important database dashboards:
 - Inventory Postgres growth: stock movements, low-stock events, table sizes, connections, and write latency.
 - Sales Postgres growth: orders inserted per minute, table sizes, connections, and write latency.
 - Invoicing Postgres growth: invoices generated, payment status mix, table sizes, connections, and write latency.
-- ClickHouse analytics: inserted rows, query duration, storage size, failed queries, and ingestion freshness.
-- End-to-end pipeline freshness: latest Postgres `updated_at` compared with latest ClickHouse watermark.
+- StarRocks analytics: inserted rows, query duration, storage size, failed queries, and ingestion freshness.
+- End-to-end pipeline freshness: latest Postgres `updated_at` compared with latest StarRocks watermark.
 
 Grafana should answer operational questions such as:
 
 - Is the orchestrator binary running and producing traffic?
 - Are all four Postgres databases growing?
 - How far has the simulated clock progressed through the historical backfill?
-- Is ClickHouse receiving fresh analytical data?
+- Is StarRocks receiving fresh analytical data?
 - Which source table is lagging behind?
 - How many natural-language questions and dashboard requests has the agent handled?
 
@@ -178,7 +178,7 @@ Responsible for exposing pipeline and agent behavior to the UI. It is one intern
 Expected first-version behavior:
 
 - Report source connectivity.
-- Report target ClickHouse connectivity.
+- Report target StarRocks connectivity.
 - Report table-level ingestion state, including latest watermark and rows loaded.
 - Expose a simple endpoint to trigger or observe ingestion runs if the worker supports it.
 - Expose REST JSON endpoints for the Next.js UI.
@@ -192,7 +192,7 @@ Expected first-version behavior:
 
 - Talk to Ollama for reasoning and SQL generation.
 - Restrict generated SQL to safe analytical queries by default.
-- Execute ClickHouse queries and return tabular results.
+- Execute StarRocks queries and return tabular results.
 - Return generated SQL alongside answers so the demo is transparent.
 - Expose Prometheus metrics for questions asked, SQL generated, query duration, and query failures.
 
@@ -227,7 +227,7 @@ Suggested source domains:
 - Sales: orders (`orders` table).
 - Invoicing: invoices generated from orders (`invoices` table).
 
-ClickHouse tables should be shaped for analytical questions such as:
+StarRocks tables should be shaped for analytical questions such as:
 
 - Revenue by customer.
 - Revenue by order status and time period.
@@ -264,7 +264,7 @@ ClickHouse tables should be shaped for analytical questions such as:
 These decisions are not final yet:
 
 - The exact visual identity of the Next.js UI.
-- Exact ClickHouse schema shape for revenue and fulfillment analytics.
+- Exact StarRocks schema shape for revenue and fulfillment analytics.
 - Exact API contract between the Next.js UI and Go services.
 - Exact boundaries between Go internal packages in the single binary.
 
@@ -276,11 +276,11 @@ Start by creating a minimal Docker Compose stack with:
 - Inventory Postgres (`inventory`).
 - Sales Postgres (`sales`).
 - Invoicing Postgres (`invoicing`).
-- ClickHouse.
+- StarRocks.
 - Ollama.
 - Prometheus.
 - Grafana.
 - Go orchestrated data engine (single binary: Orchestrator Engine + four domain microservices, ingestion worker, control API, and agent package).
 - Next.js UI in `apps/web`.
 
-Then seed the Postgres databases with a small dataset and prove one end-to-end path: source row to ClickHouse row to agent answer.
+Then seed the Postgres databases with a small dataset and prove one end-to-end path: source row to StarRocks row to agent answer.

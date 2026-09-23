@@ -24,59 +24,8 @@ services:
     networks:
       - datastack
 
-  nats:
-    image: nats:2.10-alpine
-    mem_limit: 256m
-    memswap_limit: 256m
-    cpus: 0.50
-    command: ["-js", "-m", "8222"]
-    ports:
-      - "4222:4222"
-      - "8222:8222"
-    networks:
-      - datastack
-
-  nats-exporter:
-    image: natsio/prometheus-nats-exporter:0.15.0
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.20
-    command: ["-varz", "http://nats:8222"]
-    ports:
-      - "7777:7777"
-    depends_on:
-      - nats
-    networks:
-      - datastack
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
-    mem_limit: 3g
-    memswap_limit: 3g
-    cpus: 2.00
-    environment:
-      CLICKHOUSE_DB: analytics
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
-    ports:
-      - "8123:8123"
-      - "9000:9000"
-      - "9363:9363"
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./observability/clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
-    healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-    networks:
-      - datastack
-
   starrocks:
     image: starrocks/allin1-ubuntu:3.3-latest
-    # Same budget as clickhouse for an apples-to-apples memory comparison.
     mem_limit: 3g
     memswap_limit: 3g
     cpus: 2.00
@@ -105,8 +54,6 @@ services:
       - "8080:8080"
     depends_on:
       postgres:
-        condition: service_healthy
-      clickhouse:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
@@ -145,9 +92,7 @@ services:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     depends_on:
-      - nats-exporter
       - postgres-exporter
-      - clickhouse
       - backend
     networks:
       - datastack
@@ -161,7 +106,6 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: false
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
       # Test project: no login required, everyone gets full access anonymously.
       GF_AUTH_ANONYMOUS_ENABLED: true
       GF_AUTH_ANONYMOUS_ORG_NAME: Main Org.
@@ -177,7 +121,6 @@ services:
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
-      - clickhouse
     networks:
       - datastack
 
@@ -206,7 +149,6 @@ networks:
 
 volumes:
   postgres_data:
-  clickhouse_data:
   prometheus_data:
   grafana_data:
   starrocks_data:

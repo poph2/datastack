@@ -36,7 +36,7 @@ export default function AgentPage() {
           role: "agent",
           text: data.sql
             ? "Here's what I found:"
-            : "The agent isn't wired up to Ollama/ClickHouse yet — this is a shell response.",
+            : "The agent isn't wired up to Ollama/StarRocks yet — this is a shell response.",
           sql: data.sql,
         },
       ]);

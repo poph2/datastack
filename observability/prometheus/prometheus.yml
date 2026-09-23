@@ -10,13 +10,6 @@ scrape_configs:
         labels:
           service: prometheus
 
-  - job_name: nats
-    static_configs:
-      - targets:
-          - nats-exporter:7777
-        labels:
-          service: nats
-
   - job_name: postgres
     static_configs:
       - targets:
@@ -24,13 +17,6 @@ scrape_configs:
         labels:
           source: postgres
           service: postgres
-
-  - job_name: clickhouse
-    static_configs:
-      - targets:
-          - clickhouse:9363
-        labels:
-          service: clickhouse
 
   - job_name: starrocks-fe
     metrics_path: /metrics

@@ -1,4 +1,4 @@
-// Package agent will own natural-language question answering against ClickHouse via Ollama.
+// Package agent will own natural-language question answering against StarRocks via Ollama.
 package agent
 
 // Answer is a placeholder response shape for a natural-language question.
@@ -8,7 +8,7 @@ type Answer struct {
 	Rows     []any  `json:"rows"`
 }
 
-// Service will talk to Ollama and execute read-only ClickHouse queries.
+// Service will talk to Ollama and execute read-only StarRocks queries.
 type Service struct{}
 
 // New creates an agent Service.

@@ -113,6 +113,5 @@ The ingestion worker registers its metrics on the **same shared `/metrics` endpo
 
 ## Known Gaps To Resolve Before Implementation
 
-- **ClickHouse vs. StarRocks conflict elsewhere in the repo**: this doc targets StarRocks only, per your direction. However, `docker-compose.yml`, [CLAUDE.md](../CLAUDE.md) ("First analytical database: ClickHouse"), the Grafana dashboard, and the Next.js command center dashboard all currently assume ClickHouse as the (or an) analytical target. These need a follow-up pass to either remove ClickHouse entirely or explicitly demote it to "evaluation only, not an ingestion target." Flagging rather than silently changing those files, since it's a larger blast radius than this document.
 - Exact mechanism for exposing Tier 1/2 context from the ingestion package to the agent package (in-process interface vs. shared struct with a mutex vs. a small internal event bus) is not yet decided.
 - Poll interval (250ms default), batch size (1,000 rows), and flush timeout (250ms) are starting points — expect to tune once real throughput is measured.

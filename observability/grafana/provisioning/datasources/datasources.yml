@@ -9,21 +9,6 @@ datasources:
     isDefault: true
     editable: true
 
-  - name: ClickHouse
-    uid: clickhouse
-    type: grafana-clickhouse-datasource
-    access: proxy
-    url: http://clickhouse:8123
-    jsonData:
-      defaultDatabase: analytics
-      port: 8123
-      protocol: http
-      server: clickhouse
-      username: default
-    secureJsonData:
-      password: ""
-    editable: true
-
   - name: StarRocks
     uid: starrocks
     type: mysql

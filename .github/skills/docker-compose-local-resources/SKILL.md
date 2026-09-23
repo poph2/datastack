@@ -1,6 +1,6 @@
 ---
 name: docker-compose-local-resources
-description: "Use when writing, editing, reviewing, or validating Docker Compose for DataStack, docker-compose.yml, compose.yaml, services, containers, local Docker, memory limits, CPU limits, resource budgets, Prometheus, Grafana, Postgres, ClickHouse, Ollama, NATS, Go services, or Next.js services. Always ensure every Compose service has appropriate local-machine CPU and memory allowances."
+description: "Use when writing, editing, reviewing, or validating Docker Compose for DataStack, docker-compose.yml, compose.yaml, services, containers, local Docker, memory limits, CPU limits, resource budgets, Prometheus, Grafana, Postgres, StarRocks, Ollama, Go services, or Next.js services. Always ensure every Compose service has appropriate local-machine CPU and memory allowances."
 argument-hint: "Docker Compose file or service change to resource-budget"
 ---
 
@@ -46,9 +46,7 @@ Use these as starting points, then adjust when real measurements prove they are 
 | Next.js dev server       |   `512m` to `1g` | `0.50` to `1.00` |
 | Postgres source database |   `512m` to `1g` | `0.50` to `1.00` |
 | Postgres exporter        |  `64m` to `128m` | `0.10` to `0.25` |
-| NATS                     | `128m` to `256m` | `0.25` to `0.50` |
-| NATS exporter            |  `64m` to `128m` | `0.10` to `0.25` |
-| ClickHouse               |     `2g` to `4g` | `1.50` to `3.00` |
+| StarRocks                |     `2g` to `4g` | `1.50` to `3.00` |
 | Ollama                   |     `4g` to `8g` | `2.00` to `4.00` |
 | Prometheus               |   `512m` to `1g` | `0.50` to `1.00` |
 | Grafana                  |   `512m` to `1g` | `0.50` to `1.00` |
@@ -62,9 +60,7 @@ For the first full local demo stack, use a conservative laptop-oriented budget:
 | `orders-postgres`       |      `768m` | `0.75` |
 | `crm-postgres`          |      `768m` | `0.75` |
 | `inventory-postgres`    |      `768m` | `0.75` |
-| `nats`                  |      `256m` | `0.50` |
-| `nats-exporter`         |      `128m` | `0.20` |
-| `clickhouse`            |        `3g` | `2.00` |
+| `starrocks`             |        `3g` | `2.00` |
 | `ollama`                |        `6g` | `3.00` |
 | each Postgres exporter  |      `128m` | `0.20` |
 | `prometheus`            |        `1g` | `1.00` |

@@ -203,5 +203,5 @@ Each service in this binary runs a background HTTP server (e.g. `:2112/metrics`)
 
 ## Known Gaps To Resolve Before Implementation
 
-- The current `docker-compose.yml`/`postgres/init` now use the `customer`/`inventory`/`sales`/`invoicing` database names described above; a standalone `nats` service is still present in Compose and should be removed once this single-binary orchestrator is implemented.
+- The current `docker-compose.yml`/`postgres/init` now use the `customer`/`inventory`/`sales`/`invoicing` database names described above; the `nats` service has been removed from Compose since this subsystem uses in-memory channels instead.
 - Exact Prometheus metrics port for this binary (`:2112` above) vs. the convention already used elsewhere in the stack (each Go service exposing `/metrics` on its own service port) should be reconciled.

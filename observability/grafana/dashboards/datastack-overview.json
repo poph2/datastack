@@ -3,7 +3,7 @@
   "uid": "datastack-overview",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 5,
+  "version": 6,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-30m", "to": "now" },
@@ -147,82 +147,16 @@
       ]
     },
     {
-      "id": 30,
-      "type": "row",
-      "title": "ClickHouse (all databases)",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 }
-    },
-    {
-      "id": 31,
-      "type": "timeseries",
-      "title": "Resident Memory (bytes)",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 34 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "ClickHouseAsyncMetrics_MemoryResident",
-          "legendFormat": "resident memory",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 32,
-      "type": "timeseries",
-      "title": "Queries / sec",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 34 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(ClickHouseProfileEvents_Query[5m])",
-          "legendFormat": "queries",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 33,
-      "type": "timeseries",
-      "title": "Avg Query Time (ms)",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 34 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(ClickHouseProfileEvents_QueryTimeMicroseconds[5m]) / 1000 / (rate(ClickHouseProfileEvents_Query[5m]) > 0)",
-          "legendFormat": "avg query time",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 34,
-      "type": "table",
-      "title": "Table Sizes (per database)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 42 },
-      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
-      "targets": [
-        {
-          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
-          "rawSql": "SELECT database, count() AS parts, sum(rows) AS rows, formatReadableSize(sum(bytes_on_disk)) AS size_on_disk FROM system.parts WHERE active GROUP BY database ORDER BY sum(bytes_on_disk) DESC",
-          "format": 1,
-          "refId": "A"
-        }
-      ]
-    },
-    {
       "id": 35,
       "type": "row",
       "title": "StarRocks (all databases)",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 }
     },
     {
       "id": 36,
       "type": "timeseries",
       "title": "BE Process Memory (bytes)",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 51 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 34 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -237,7 +171,7 @@
       "id": 37,
       "type": "timeseries",
       "title": "FE JVM Heap Used (bytes)",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 51 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 34 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -252,7 +186,7 @@
       "id": 38,
       "type": "timeseries",
       "title": "Queries / sec",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 51 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 34 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -267,7 +201,7 @@
       "id": 39,
       "type": "table",
       "title": "Table Sizes (per database)",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 59 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 42 },
       "datasource": { "type": "mysql", "uid": "starrocks" },
       "targets": [
         {
@@ -283,13 +217,13 @@
       "id": 40,
       "type": "row",
       "title": "Go Services",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 }
     },
     {
       "id": 41,
       "type": "timeseries",
       "title": "Resident Memory (bytes) by Service",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -304,7 +238,7 @@
       "id": 42,
       "type": "timeseries",
       "title": "Goroutines by Service",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
