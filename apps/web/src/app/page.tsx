@@ -5,7 +5,8 @@ export default function Home() {
         DataStack
       </h1>
       <p className="max-w-md text-sm text-zinc-600 dark:text-zinc-400">
-        Live command center shell. Pipeline status, chat, and dashboards land here next.
+        Live command center shell. Pipeline status, chat, and dashboards land
+        here next.
       </p>
     </main>
   );
