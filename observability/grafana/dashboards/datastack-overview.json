@@ -3,11 +3,25 @@
   "uid": "datastack-overview",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-30m", "to": "now" },
   "tags": ["datastack"],
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(up, service)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "sort": 1
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
@@ -18,14 +32,16 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Targets Up",
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 1 },
+      "title": "$service",
+      "repeat": "service",
+      "repeatDirection": "h",
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "up",
-          "legendFormat": "{{job}} - {{service}}{{instance}}",
+          "expr": "up{service=\"$service\"}",
+          "legendFormat": "{{service}}",
           "refId": "A"
         }
       ],
@@ -41,11 +57,18 @@
               { "color": "red", "value": null },
               { "color": "green", "value": 1 }
             ]
-          }
+          },
+          "color": { "mode": "thresholds" }
         },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" }
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
     },
     {
       "id": 10,
