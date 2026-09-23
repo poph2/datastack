@@ -3,7 +3,7 @@
   "uid": "datastack-overview",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-30m", "to": "now" },
@@ -85,7 +85,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_stat_database_numbackends",
+          "expr": "pg_stat_database_numbackends{datname=~\"orders|crm|inventory\"}",
           "legendFormat": "{{datname}}",
           "refId": "A"
         }
@@ -100,13 +100,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(pg_stat_database_xact_commit[5m])",
+          "expr": "rate(pg_stat_database_xact_commit{datname=~\"orders|crm|inventory\"}[5m])",
           "legendFormat": "commit {{datname}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(pg_stat_database_xact_rollback[5m])",
+          "expr": "rate(pg_stat_database_xact_rollback{datname=~\"orders|crm|inventory\"}[5m])",
           "legendFormat": "rollback {{datname}}",
           "refId": "B"
         }
@@ -121,7 +121,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_database_size_bytes",
+          "expr": "pg_database_size_bytes{datname=~\"orders|crm|inventory\"}",
           "legendFormat": "{{datname}}",
           "refId": "A"
         }
@@ -136,7 +136,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_database_size_bytes",
+          "expr": "pg_database_size_bytes{datname=~\"orders|crm|inventory\"}",
           "format": "table",
           "instant": true,
           "refId": "A"

@@ -159,16 +159,16 @@ Example scenarios:
 
 ### Go Ingestion Worker
 
-Responsible for moving data from Postgres sources into ClickHouse.
+Responsible for moving data from Postgres sources into StarRocks. See [docs/GO-INGESTION-WORKER-ARCHITECTURE.md](docs/GO-INGESTION-WORKER-ARCHITECTURE.md) for the full spec (schema reflection, watermark polling, micro-batch flushing, the semantic context it builds for the agent package, and telemetry).
 
 Expected first-version behavior:
 
 - Read configured Postgres sources and tables.
 - Poll incrementally using an `updated_at` column.
 - Track watermarks per source table.
-- Write into ClickHouse tables designed for analytics.
+- Write into StarRocks tables designed for analytics.
 - Emit structured logs useful during a live demo.
-- Expose Prometheus metrics for rows ingested, ingestion lag, batch duration, ClickHouse insert failures, and source read failures.
+- Expose Prometheus metrics for rows ingested, ingestion lag, batch duration, StarRocks insert failures, and source read failures.
 - Prefer simple, reliable behavior before adding CDC.
 
 ### Go Backend API
@@ -239,7 +239,8 @@ ClickHouse tables should be shaped for analytical questions such as:
 ## Architecture Documents
 
 - [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) — the detailed spec for the Go orchestrated data engine (domain lifecycle, per-database schemas, the fast-forward backfill algorithm, message payloads, Prometheus metric names, and operational optimizations). Read it before implementing the orchestrator, the Customer/Inventory/Sales/Invoicing microservices, or their schemas.
-- Other subsystems (ingestion worker, backend API, agent, Next.js UI) will each get their own architecture document under `docs/` as they're designed in detail.
+- [docs/GO-INGESTION-WORKER-ARCHITECTURE.md](docs/GO-INGESTION-WORKER-ARCHITECTURE.md) — the detailed spec for the Go ingestion worker (zero-ETL watermark polling, StarRocks schema/DDL generation, the two-tier semantic context it builds for the agent package, and telemetry). Read it before implementing ingestion.
+- Other subsystems (backend API, agent, Next.js UI) will each get their own architecture document under `docs/` as they're designed in detail.
 
 ## Engineering Preferences
 
