@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { backendUrl, grafanaUrl } from "@/lib/config";
 import { StatusBadge } from "@/components/StatusBadge";
+import { backendUrl, grafanaUrl } from "@/lib/config";
+import { useEffect, useState } from "react";
 
 export default function OverviewPage() {
   const [backendOk, setBackendOk] = useState<boolean | null>(null);

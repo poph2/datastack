@@ -1,4 +1,10 @@
-export function StatusBadge({ ok, label }: { ok: boolean | null; label: string }) {
+export function StatusBadge({
+  ok,
+  label,
+}: {
+  ok: boolean | null;
+  label: string;
+}) {
   const color =
     ok === null
       ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { backendUrl } from "@/lib/config";
+import { useState } from "react";
 
 type Message = {
   role: "user" | "agent";
