@@ -5,9 +5,9 @@ export function backendUrl(): string {
   return process.env.NEXT_PUBLIC_BACKEND_URL ?? DEFAULT_BACKEND_URL;
 }
 
-const DEFAULT_GRAFANA_URL = "http://localhost:3001";
+const DEFAULT_PROMETHEUS_URL = "http://localhost:9090";
 
-/** Base URL for Grafana, reachable from the browser (used for dashboard embeds). */
-export function grafanaUrl(): string {
-  return process.env.NEXT_PUBLIC_GRAFANA_URL ?? DEFAULT_GRAFANA_URL;
+/** Base URL for Prometheus, only ever called server-side (API routes). */
+export function prometheusUrl(): string {
+  return process.env.PROMETHEUS_URL ?? DEFAULT_PROMETHEUS_URL;
 }
