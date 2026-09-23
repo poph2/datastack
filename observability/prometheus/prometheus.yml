@@ -25,6 +25,18 @@ scrape_configs:
       - targets:
           - clickhouse:9363
 
+  - job_name: starrocks-fe
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - starrocks:8030
+
+  - job_name: starrocks-be
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - starrocks:8040
+
   - job_name: go-services
     metrics_path: /metrics
     static_configs:

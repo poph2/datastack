@@ -23,3 +23,14 @@ datasources:
     secureJsonData:
       password: ""
     editable: true
+
+  - name: StarRocks
+    uid: starrocks
+    type: mysql
+    access: proxy
+    url: starrocks:9030
+    database: information_schema
+    user: root
+    secureJsonData:
+      password: ""
+    editable: true
