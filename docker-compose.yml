@@ -179,6 +179,11 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: false
       GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      # Anonymous viewer access + embedding so the web command center can iframe dashboards.
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: true
+      GF_SECURITY_COOKIE_SAMESITE: disabled
     ports:
       - "3001:3000"
     volumes:
@@ -188,6 +193,25 @@ services:
     depends_on:
       - prometheus
       - clickhouse
+    networks:
+      - datastack
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:8080
+        NEXT_PUBLIC_GRAFANA_URL: http://localhost:3001
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 1.00
+    ports:
+      - "3002:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+      grafana:
+        condition: service_started
     networks:
       - datastack
 

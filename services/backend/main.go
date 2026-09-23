@@ -8,6 +8,7 @@ import (
 
 	"github.com/poph2/datastack/services/backend/internal/agent"
 	"github.com/poph2/datastack/services/backend/internal/api"
+	"github.com/poph2/datastack/services/backend/internal/control"
 	"github.com/poph2/datastack/services/backend/internal/ingestion"
 )
 
@@ -19,8 +20,9 @@ func main() {
 
 	ingestionSvc := ingestion.New()
 	agentSvc := agent.New()
+	controlSvc := control.New()
 
-	router := api.NewRouter(ingestionSvc, agentSvc)
+	router := api.NewRouter(ingestionSvc, agentSvc, controlSvc)
 
 	log.Printf("backend listening on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {

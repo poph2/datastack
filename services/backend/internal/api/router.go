@@ -6,20 +6,40 @@ import (
 	"net/http"
 
 	"github.com/poph2/datastack/services/backend/internal/agent"
+	"github.com/poph2/datastack/services/backend/internal/control"
 	"github.com/poph2/datastack/services/backend/internal/ingestion"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // NewRouter wires up all HTTP routes for the backend service.
-func NewRouter(ingestionSvc *ingestion.Service, agentSvc *agent.Service) http.Handler {
+func NewRouter(ingestionSvc *ingestion.Service, agentSvc *agent.Service, controlSvc *control.Service) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", handleHealth)
 	mux.HandleFunc("GET /api/ingestion/status", handleIngestionStatus(ingestionSvc))
 	mux.HandleFunc("POST /api/agent/ask", handleAgentAsk(agentSvc))
+	mux.HandleFunc("GET /api/control/status", handleControlStatus(controlSvc))
+	mux.HandleFunc("POST /api/control/orchestrator/start", handleControlSet(controlSvc.SetOrchestratorRunning, true))
+	mux.HandleFunc("POST /api/control/orchestrator/stop", handleControlSet(controlSvc.SetOrchestratorRunning, false))
+	mux.HandleFunc("POST /api/control/ingestion/start", handleControlSet(controlSvc.SetIngestionRunning, true))
+	mux.HandleFunc("POST /api/control/ingestion/stop", handleControlSet(controlSvc.SetIngestionRunning, false))
 	mux.Handle("GET /metrics", promhttp.Handler())
 
-	return mux
+	return withCORS(mux)
+}
+
+// withCORS allows the browser-hosted UI (a different origin/port) to call the API directly.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +49,18 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleIngestionStatus(svc *ingestion.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, svc.Statuses())
+	}
+}
+
+func handleControlStatus(svc *control.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, svc.Status())
+	}
+}
+
+func handleControlSet(set func(bool) control.Status, running bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, set(running))
 	}
 }
 
