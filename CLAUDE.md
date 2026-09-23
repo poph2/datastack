@@ -55,10 +55,10 @@ flowchart LR
   Orchestrator -- CreateSaleCmd --> SalesSvc[Sales microservice]
   Orchestrator -- ProcessPaymentCmd --> InvoicingSvc[Invoicing microservice]
   SalesSvc -- OrderCreatedEvent --> InvoicingSvc
-  CustomerSvc --> CustomerDB[(db_customers)]
-  InventorySvc --> InventoryDB[(db_inventory)]
-  SalesSvc --> SalesDB[(db_sales)]
-  InvoicingSvc --> InvoicingDB[(db_invoicing)]
+  CustomerSvc --> CustomerDB[(customer)]
+  InventorySvc --> InventoryDB[(inventory)]
+  SalesSvc --> SalesDB[(sales)]
+  InvoicingSvc --> InvoicingDB[(invoicing)]
   Ingestor[Go ingestion worker] --> ControlAPI[Go control API]
   ControlAPI --> Agent[Go agent package]
   ControlAPI --> Orchestrator
@@ -272,10 +272,10 @@ These decisions are not final yet:
 
 Start by creating a minimal Docker Compose stack with:
 
-- Customer Postgres (`db_customers`).
-- Inventory Postgres (`db_inventory`).
-- Sales Postgres (`db_sales`).
-- Invoicing Postgres (`db_invoicing`).
+- Customer Postgres (`customer`).
+- Inventory Postgres (`inventory`).
+- Sales Postgres (`sales`).
+- Invoicing Postgres (`invoicing`).
 - ClickHouse.
 - Ollama.
 - Prometheus.

@@ -1,3 +1,4 @@
-CREATE DATABASE orders OWNER demo;
-CREATE DATABASE crm OWNER demo;
+CREATE DATABASE customer OWNER demo;
 CREATE DATABASE inventory OWNER demo;
+CREATE DATABASE sales OWNER demo;
+CREATE DATABASE invoicing OWNER demo;

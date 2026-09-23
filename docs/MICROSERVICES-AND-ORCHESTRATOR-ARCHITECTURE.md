@@ -27,7 +27,7 @@ Key constraints:
 │  │ INDEPENDENT BOOT & DECENTRALIZED AUTO-MIGRATION PHASE              │ │
 │  │                                                                    │ │
 │  │  [Customer Service]  [Inventory Service]  [Sales Service]  [Invoicing Service] │
-│  │  ├─ Connect db_customers  ├─ Connect db_inventory  ├─ Connect db_sales  ├─ Connect db_invoicing │
+│  │  ├─ Connect customer     ├─ Connect inventory   ├─ Connect sales     ├─ Connect invoicing  │
 │  │  └─ GORM AutoMigrate      └─ GORM AutoMigrate       └─ GORM AutoMigrate  └─ GORM AutoMigrate     │
 │  └───────────────────────────────────────────────────────────────────┘ │
 │                                                                         │
@@ -39,13 +39,13 @@ Key constraints:
 │      ▼                        ▼                        ▼               │
 │  [Customer Service]      [Inventory Service]      [Sales Service]      │
 │  ├─ command channel      ├─ command channel        ├─ command channel  │
-│  ├─ writes db_customers  ├─ writes db_inventory     ├─ writes db_sales  │
+│  ├─ writes customer       ├─ writes inventory     ├─ writes sales      │
 │  └─ updates state cache  └─ updates state cache     └─ emits OrderCreatedEvent │
 │                                                                │        │
 │                                                                ▼        │
 │                                                      [Invoicing Service] │
 │                                                      ├─ event channel    │
-│                                                      └─ writes db_invoicing │
+│                                                      └─ writes invoicing │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,33 +53,33 @@ Not pictured above for space: the Orchestrator also sends `ProcessPaymentCmd` di
 
 Each domain connects to its own dedicated Postgres database and runs its own migration logic at boot:
 
-**Customer microservice (`db_customers`)**
+**Customer microservice (`customer`)**
 
-- Startup: connects to `db_customers`, runs GORM `AutoMigrate` for the `customers` table before opening its command channel.
+- Startup: connects to `customer`, runs GORM `AutoMigrate` for the `customers` table before opening its command channel.
 - Role: master data repository for user accounts.
 - Input: `CreateCustomerCmd` from the Orchestrator.
 - Behavior: generates a unique customer ID, writes the record stamped with the simulated command timestamp, updates the shared state cache with the new Customer ID.
 - Output: none (terminal write service).
 
-**Inventory microservice (`db_inventory`)**
+**Inventory microservice (`inventory`)**
 
-- Startup: connects to `db_inventory`, runs GORM `AutoMigrate` for the `products` table.
+- Startup: connects to `inventory`, runs GORM `AutoMigrate` for the `products` table.
 - Role: manages product catalog master data and stock levels.
 - Input: `RestockInventoryCmd` from the Orchestrator.
 - Behavior: upserts product SKUs or updates stock quantities with the simulated timestamp, updates the state cache with valid SKUs.
 - Output: none (terminal write service).
 
-**Sales microservice (`db_sales`)**
+**Sales microservice (`sales`)**
 
-- Startup: connects to `db_sales`, runs GORM `AutoMigrate` for the `orders` table.
+- Startup: connects to `sales`, runs GORM `AutoMigrate` for the `orders` table.
 - Role: processes e-commerce checkout transactions.
 - Input: `CreateSaleCmd` from the Orchestrator.
 - Behavior: validates the command references a valid Customer ID and SKU, calculates order totals, writes the order stamped with the simulated date, emits an async `OrderCreatedEvent`.
 - Output: `OrderCreatedEvent` to the Invoicing microservice, over a Go channel.
 
-**Invoicing microservice (`db_invoicing`)**
+**Invoicing microservice (`invoicing`)**
 
-- Startup: connects to `db_invoicing`, runs GORM `AutoMigrate` for the `invoices` table.
+- Startup: connects to `invoicing`, runs GORM `AutoMigrate` for the `invoices` table.
 - Role: handles financial ledger entries and billing.
 - Input: `OrderCreatedEvent` from the Sales microservice, and `ProcessPaymentCmd` sent directly by the Orchestrator (payment settlement/failure events, independent of order creation).
 - Behavior: processes both asynchronously, generates or updates an invoice record with a payment status stamped with the simulated date.
@@ -89,7 +89,7 @@ Each domain connects to its own dedicated Postgres database and runs its own mig
 
 Each microservice owns a dedicated, logically isolated Postgres database. Tables are auto-migrated strictly by the owning service at boot. Every schema should include `COMMENT ON TABLE`/`COMMENT ON COLUMN` so downstream static schema extraction can give the agent good semantic context.
 
-**`db_customers` → `customers`**
+**`customer` → `customers`**
 
 - `customer_id` (string, PK) — formatted `CUST-XXXXXX`.
 - `full_name` (string).
@@ -97,7 +97,7 @@ Each microservice owns a dedicated, logically isolated Postgres database. Tables
 - `created_at` (timestamptz, indexed) — stamped with the simulated date.
 - `updated_at` (timestamptz, indexed) — auto-updated on modification.
 
-**`db_inventory` → `products`**
+**`inventory` → `products`**
 
 - `sku` (string, PK) — formatted `SKU-XXXX`.
 - `product_name` (string).
@@ -106,7 +106,7 @@ Each microservice owns a dedicated, logically isolated Postgres database. Tables
 - `created_at` (timestamptz, indexed) — stamped with the simulated date.
 - `updated_at` (timestamptz, indexed) — updated on restock/modification.
 
-**`db_sales` → `orders`**
+**`sales` → `orders`**
 
 - `order_id` (string, PK) — formatted `ORD-XXXXXX`.
 - `customer_id` (string, indexed) — references the Customer microservice.
@@ -115,7 +115,7 @@ Each microservice owns a dedicated, logically isolated Postgres database. Tables
 - `created_at` (timestamptz, indexed) — stamped with the simulated date.
 - `updated_at` (timestamptz, indexed) — updated on state change.
 
-**`db_invoicing` → `invoices`**
+**`invoicing` → `invoices`**
 
 - `invoice_id` (UUID, PK).
 - `order_id` (string, indexed) — references the Sales order.
@@ -203,5 +203,5 @@ Each service in this binary runs a background HTTP server (e.g. `:2112/metrics`)
 
 ## Known Gaps To Resolve Before Implementation
 
-- The current `docker-compose.yml`/`postgres/init` still reflect the earlier Orders/CRM/Inventory model and a standalone `nats` service — these need to be migrated to `db_customers`/`db_inventory`/`db_sales`/`db_invoicing` and the NATS service removed when this is implemented.
+- The current `docker-compose.yml`/`postgres/init` now use the `customer`/`inventory`/`sales`/`invoicing` database names described above; a standalone `nats` service is still present in Compose and should be removed once this single-binary orchestrator is implemented.
 - Exact Prometheus metrics port for this binary (`:2112` above) vs. the convention already used elsewhere in the stack (each Go service exposing `/metrics` on its own service port) should be reconciled.

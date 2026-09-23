@@ -4,7 +4,7 @@ This is the detailed spec for DataStack's Go ingestion worker, referenced from [
 
 ## 1. Executive Summary And Core Purpose
 
-The ingestion worker is the high-throughput, low-latency bridge between the four PostgreSQL microservice databases (`db_customers`, `db_inventory`, `db_sales`, `db_invoicing`) and **StarRocks**, the target analytical warehouse. (ClickHouse is not an ingestion target for this subsystem — see "Known Gaps" below.)
+The ingestion worker is the high-throughput, low-latency bridge between the four PostgreSQL microservice databases (`customer`, `inventory`, `sales`, `invoicing`) and **StarRocks**, the target analytical warehouse. (ClickHouse is not an ingestion target for this subsystem — see "Known Gaps" below.)
 
 It implements a zero-ETL micro-batching pattern based on `updated_at` timestamp watermarking. Independent goroutines poll each source table in parallel, buffer rows in memory, and flush micro-batches into StarRocks via its HTTP Stream Load API. Targets: sub-second ingestion latency and low, steady memory use.
 
@@ -18,10 +18,10 @@ It implements a zero-ETL micro-batching pattern based on `updated_at` timestamp 
 │     └── Builds in-memory Tier 1 & Tier 2 semantic context (see below)    │
 │                                                                           │
 │  2. CONCURRENT WATERMARK POLLING ENGINE                                   │
-│     ├── Goroutine 1: polls db_customers.customers WHERE updated_at > wm  │
-│     ├── Goroutine 2: polls db_inventory.products  WHERE updated_at > wm  │
-│     ├── Goroutine 3: polls db_sales.orders        WHERE updated_at > wm  │
-│     └── Goroutine 4: polls db_invoicing.invoices  WHERE updated_at > wm  │
+│     ├── Goroutine 1: polls customer.customers   WHERE updated_at > wm    │
+│     ├── Goroutine 2: polls inventory.products   WHERE updated_at > wm    │
+│     ├── Goroutine 3: polls sales.orders         WHERE updated_at > wm    │
+│     └── Goroutine 4: polls invoicing.invoices   WHERE updated_at > wm    │
 │                                                                           │
 │  3. HIGH-SPEED BATCH SINK & WATERMARK COMMIT                              │
 │     ├── Writes records in micro-batches via StarRocks Stream Load        │
@@ -75,7 +75,7 @@ The ingestion worker **builds and exposes** the semantic context described below
 │  │   checkouts"                                                          │
 │  ├── Column comment (total_amount): "Final order cost in USD including  │
 │  │   tax and shipping"                                                   │
-│  └── Source database & microservice domain: "db_sales (Sales             │
+│  └── Source database & microservice domain: "sales (Sales                │
 │      microservice)"                                                      │
 │                                                                           │
 │  TIER 2: DYNAMIC OPERATIONAL METADATA (runtime pipeline context)         │

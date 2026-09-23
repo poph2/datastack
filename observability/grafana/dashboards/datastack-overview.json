@@ -3,7 +3,7 @@
   "uid": "datastack-overview",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 4,
+  "version": 5,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-30m", "to": "now" },
@@ -85,7 +85,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_stat_database_numbackends{datname=~\"orders|crm|inventory\"}",
+          "expr": "pg_stat_database_numbackends{datname=~\"customer|inventory|sales|invoicing\"}",
           "legendFormat": "{{datname}}",
           "refId": "A"
         }
@@ -100,13 +100,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(pg_stat_database_xact_commit{datname=~\"orders|crm|inventory\"}[5m])",
+          "expr": "rate(pg_stat_database_xact_commit{datname=~\"customer|inventory|sales|invoicing\"}[5m])",
           "legendFormat": "commit {{datname}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(pg_stat_database_xact_rollback{datname=~\"orders|crm|inventory\"}[5m])",
+          "expr": "rate(pg_stat_database_xact_rollback{datname=~\"customer|inventory|sales|invoicing\"}[5m])",
           "legendFormat": "rollback {{datname}}",
           "refId": "B"
         }
@@ -121,7 +121,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_database_size_bytes{datname=~\"orders|crm|inventory\"}",
+          "expr": "pg_database_size_bytes{datname=~\"customer|inventory|sales|invoicing\"}",
           "legendFormat": "{{datname}}",
           "refId": "A"
         }
@@ -136,7 +136,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "pg_database_size_bytes{datname=~\"orders|crm|inventory\"}",
+          "expr": "pg_database_size_bytes{datname=~\"customer|inventory|sales|invoicing\"}",
           "format": "table",
           "instant": true,
           "refId": "A"
@@ -144,63 +144,6 @@
       ],
       "transformations": [
         { "id": "organize", "options": { "excludeByName": { "Time": true, "job": true, "instance": true } } }
-      ]
-    },
-    {
-      "id": 20,
-      "type": "row",
-      "title": "NATS",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 }
-    },
-    {
-      "id": 21,
-      "type": "timeseries",
-      "title": "Connections",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 25 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "gnatsd_varz_connections",
-          "legendFormat": "connections",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 22,
-      "type": "timeseries",
-      "title": "Messages / sec",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 25 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gnatsd_varz_in_msgs[5m])",
-          "legendFormat": "in",
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(gnatsd_varz_out_msgs[5m])",
-          "legendFormat": "out",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "id": 23,
-      "type": "timeseries",
-      "title": "Server Memory (bytes)",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 25 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "gnatsd_varz_mem",
-          "legendFormat": "mem",
-          "refId": "A"
-        }
       ]
     },
     {
