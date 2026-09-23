@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { promQuery, promValue } from "@/lib/prometheus";
+import { NextResponse } from "next/server";
 
 export type PostgresDatabase = {
   database: string;
