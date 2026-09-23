@@ -29,7 +29,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - host.docker.internal:8080
+          - backend:8080
         labels:
           service: backend
       - targets:

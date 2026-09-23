@@ -112,6 +112,27 @@ services:
     networks:
       - datastack
 
+  backend:
+    build:
+      context: ./services/backend
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.00
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - datastack
+
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     mem_limit: 128m
@@ -144,6 +165,7 @@ services:
       - nats-exporter
       - postgres-exporter
       - clickhouse
+      - backend
     networks:
       - datastack
 
