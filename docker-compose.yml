@@ -73,6 +73,27 @@ services:
     networks:
       - datastack
 
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.3-latest
+    # Same budget as clickhouse for an apples-to-apples memory comparison.
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 2.00
+    ports:
+      - "8030:8030" # FE HTTP
+      - "9030:9030" # FE MySQL protocol
+      - "8040:8040" # BE HTTP
+    volumes:
+      - starrocks_data:/data/deploy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8030/api/health | grep -q OK"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - datastack
+
   metabase:
     image: metabase/metabase:v0.50.26
     mem_limit: 2g
@@ -156,3 +177,4 @@ volumes:
   metabase_data:
   prometheus_data:
   grafana_data:
+  starrocks_data:
