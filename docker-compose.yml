@@ -169,6 +169,32 @@ services:
     networks:
       - datastack
 
+  grafana:
+    image: grafana/grafana:11.2.2
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 0.75
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: true
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: true
+      GF_SECURITY_COOKIE_SAMESITE: disabled
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - clickhouse
+    networks:
+      - datastack
+
   web:
     build:
       context: ./apps/web
@@ -197,4 +223,5 @@ volumes:
   clickhouse_data:
   metabase_data:
   prometheus_data:
+  grafana_data:
   starrocks_data:

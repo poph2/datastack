@@ -51,13 +51,7 @@ export function DatabaseLineChart({
               tickFormatter={valueFormatter}
               width={56}
             />
-            <Tooltip
-              formatter={(value: number | string) =>
-                typeof value === "number"
-                  ? (valueFormatter?.(value) ?? value)
-                  : value
-              }
-            />
+            <Tooltip />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {seriesKeys.map((key, i) => (
               <Line
