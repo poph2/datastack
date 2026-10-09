@@ -91,7 +91,7 @@ Processing:
 
 1. Validate the input.
 2. Sleep for a uniformly random time between `LATENCY_MIN` and `LATENCY_MAX`, to mimic the gateway round trip so the step is visible in traces. If the caller gives up (the request context is cancelled), processing stops and nothing is recorded.
-3. Draw a random number. If it is below `FAILURE_RATE`, the outcome is `DECLINED` with a uniformly random `decline_reason`. Otherwise it is `SUCCESS`.
+3. Draw a random number. If it is below the live `decline_rate` chaos knob (default `FAILURE_RATE`, see [Chaos](#chaos)), the outcome is `DECLINED` with a uniformly random `decline_reason`. Otherwise it is `SUCCESS`.
 4. `INSERT` the payment row and return it.
 
 | Status | Body |
@@ -114,6 +114,19 @@ The Order Service treats any non-`200` response, a timeout, or a transport error
 | `200 OK` | The payment object |
 | `400 Bad Request` | `INVALID_REQUEST` (ID not a positive integer) |
 | `404 Not Found` | `PAYMENT_NOT_FOUND` |
+
+### `GET /payments?order_id={id}&status={status}`
+
+Lists an order's payment attempts, oldest first. `order_id` is required (at least 1); `status` is optional (`SUCCESS`, `DECLINED` or `REFUNDED`). The Order Service's reconciler calls it with `status=SUCCESS` to learn whether an order stranded in `PENDING` was actually charged; that filter is served by the double-charge guard's partial index.
+
+```json
+{ "payments": [ { "payment_id": 5001, "order_id": 123, "status": "SUCCESS", ... } ] }
+```
+
+| Status | Body |
+|---|---|
+| `200 OK` | `{"payments": [...]}`, an empty list when the order has none |
+| `400 Bad Request` | `INVALID_REQUEST` (missing or invalid `order_id`, unknown `status`) |
 
 ### `POST /payments/{id}/refund`
 
@@ -144,7 +157,7 @@ The gateway ([`gateway.go`](../../services/payment/internal/payment/gateway.go))
 
 | Setting | Default | Effect |
 |---|---|---|
-| `FAILURE_RATE` | `0.05` | Share of charges declined. `0` never declines, `1` always does |
+| `FAILURE_RATE` | `0.05` | Share of charges declined. `0` never declines, `1` always does. It is the default of the `decline_rate` knob, which changes it at runtime |
 | `LATENCY_MIN` / `LATENCY_MAX` | `20ms` / `150ms` | Simulated gateway latency. `LATENCY_MAX=0` disables it |
 | `METHOD_WEIGHTS` | `CREDIT_CARD=75,PAYPAL=25` | Method mix for charges sent without one |
 
@@ -153,6 +166,21 @@ Changes from the original spec:
 - **Latency is configured as Go durations** (`LATENCY_MIN=20ms`) instead of `LATENCY_MIN_MS=20`, like `RESTOCK_INTERVAL` in the Inventory Service.
 - **`FAILURE_RATE_BY_METHOD` is not implemented.** One rate is enough for the demo dashboards. It can be added later without changing the API.
 - **`RANDOM_SEED` is not implemented.** The process uses Go's auto-seeded generator. Repeatability is what the unit tests need, and they get it by injecting the random functions.
+
+## Chaos
+
+Runtime failure injection for live demos, from the shared [`pkgs/chaos`](../../pkgs/chaos) package:
+
+- `GET /admin/chaos` returns `{"service": "<name>", "knobs": [{"name", "description", "value", "default", "min", "max"}, ...]}`, `latency_ms` first.
+- `PUT /admin/chaos` with a partial object such as `{"latency_ms": 500}` changes those knobs and returns the same body. It is all-or-nothing: an unknown knob or a value outside `[min, max]` (or a fraction for a whole-number knob) is `400 INVALID_REQUEST`, and nothing changes.
+- `DELETE /admin/chaos` resets every knob to its default.
+
+The `/admin` routes are traced, logged and metered like the API, but never delayed by `latency_ms`. Every change is logged at INFO with the old and new value, and the gauge `chaos_knob_value{knob}` shows the current values. **Values live in the pod's memory**: a restart resets every knob to its default, and with several replicas each pod has its own values (every service runs one replica in kind).
+
+| Knob | Range | Default | Effect |
+|---|---|---|---|
+| `latency_ms` | 0 to 5000, whole | `0` | Delay before every API request is handled (not `/admin`, probes or `/metrics`). It ends early if the caller gives up (`503 REQUEST_CANCELLED`), and shows on the request span as the attribute `chaos.latency_ms` plus `chaos.latency.start`/`chaos.latency.end` events |
+| `decline_rate` | 0 to 1 | `FAILURE_RATE` | Share of charges the gateway declines, read live on every charge. `0.9` makes most checkouts fail with `PAYMENT_DECLINED` |
 
 ## Interactions
 
@@ -184,7 +212,7 @@ Every flag can also be set as an environment variable (`--failure-rate` ↔ `FAI
 |---|---|---|
 | `--http-addr` / `HTTP_ADDR` | `:8084` | Set by the chart from `port` |
 | `--database-url` / `DATABASE_URL` | none | In kind: `postgres://datastack-pg-rw:5432/payments?sslmode=require`, with `PGUSER`/`PGPASSWORD` from the CNPG secret |
-| `--failure-rate` / `FAILURE_RATE` | `0.05` | Between 0 and 1, otherwise the service refuses to start |
+| `--failure-rate` / `FAILURE_RATE` | `0.05` | Between 0 and 1, otherwise the service refuses to start. Default of the `decline_rate` chaos knob |
 | `--latency-min` / `LATENCY_MIN` | `20ms` | Go duration. Must not exceed the max |
 | `--latency-max` / `LATENCY_MAX` | `150ms` | Go duration. `0` disables simulated latency |
 | `--method-weights` / `METHOD_WEIGHTS` | `CREDIT_CARD=75,PAYPAL=25` | Relative weights, need not sum to 100 |

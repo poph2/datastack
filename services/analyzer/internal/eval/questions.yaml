@@ -1,0 +1,177 @@
+# Evaluation set for `analyzer eval`. Each case is a business question and a
+# hand-written reference query that follows the documented semantics in
+# docs/microservices/data-catalog.md. The eval compares values, not column
+# names: a generated answer passes when every reference value appears in the
+# matching row (extra columns are allowed). `ordered: true` also compares row
+# order, for questions that ask for one.
+#
+# The data is live, so questions avoid answers that swing within seconds
+# (such as the current shipment backlog). Every reference query was checked
+# against StarRocks 3.3.
+
+- id: revenue_by_tier
+  question: What is the total revenue for each customer loyalty tier?
+  sql: |
+    SELECT c.loyalty_tier, ROUND(SUM(o.total_amount), 2) AS revenue
+    FROM orders o JOIN customers c ON o.user_id = c.id
+    WHERE o.deleted_at IS NULL AND c.deleted_at IS NULL AND o.status IN ('PAID', 'SHIPPED')
+    GROUP BY c.loyalty_tier
+
+- id: roas_per_campaign
+  question: What is the ROAS of each paid campaign, as cleared revenue divided by ad spend?
+  sql: |
+    SELECT c.utm_source, c.utm_campaign, ROUND(SUM(p.amount) / c.ad_spend, 2) AS roas
+    FROM campaigns c
+    JOIN attributions a ON a.utm_source = c.utm_source AND a.utm_campaign = c.utm_campaign
+    JOIN payments p ON p.order_id = a.order_id
+    WHERE c.deleted_at IS NULL AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+      AND p.status = 'SUCCESS' AND c.ad_spend > 0
+    GROUP BY c.utm_source, c.utm_campaign, c.ad_spend
+
+- id: avg_time_to_ship
+  question: What is the average time to ship, in seconds, for shipments that have shipped?
+  sql: |
+    SELECT AVG(TIMESTAMPDIFF(SECOND, created_at, shipped_at)) AS avg_seconds_to_ship
+    FROM shipments
+    WHERE deleted_at IS NULL AND status = 'SHIPPED'
+
+- id: time_to_ship_by_tier
+  question: What is the average time to ship in seconds for each customer loyalty tier?
+  sql: |
+    SELECT c.loyalty_tier, AVG(TIMESTAMPDIFF(SECOND, s.created_at, s.shipped_at)) AS avg_seconds_to_ship
+    FROM shipments s
+    JOIN orders o ON s.order_id = o.id
+    JOIN customers c ON o.user_id = c.id
+    WHERE s.deleted_at IS NULL AND o.deleted_at IS NULL AND c.deleted_at IS NULL AND s.status = 'SHIPPED'
+    GROUP BY c.loyalty_tier
+
+- id: failure_reasons
+  question: How many checkouts failed for each failure reason?
+  sql: |
+    SELECT failure_reason, COUNT(*) AS failed_checkouts
+    FROM orders
+    WHERE deleted_at IS NULL AND status = 'FAILED'
+    GROUP BY failure_reason
+
+- id: top_products_by_revenue
+  question: What are the top 5 products by revenue?
+  ordered: true
+  sql: |
+    SELECT product_id, ROUND(SUM(total_amount), 2) AS revenue
+    FROM orders
+    WHERE deleted_at IS NULL AND status IN ('PAID', 'SHIPPED')
+    GROUP BY product_id
+    ORDER BY revenue DESC
+    LIMIT 5
+
+- id: out_of_stock_products
+  question: Which products are out of stock right now?
+  sql: |
+    SELECT product_id
+    FROM inventory
+    WHERE deleted_at IS NULL AND stock_level = 0
+
+- id: decline_reasons
+  question: How many payments were declined for each decline reason?
+  sql: |
+    SELECT decline_reason, COUNT(*) AS declined_payments
+    FROM payments
+    WHERE deleted_at IS NULL AND status = 'DECLINED'
+    GROUP BY decline_reason
+
+- id: conversion_rate_per_campaign
+  question: What is the conversion rate of each campaign, as converted clicks divided by all clicks?
+  sql: |
+    SELECT utm_source, utm_campaign, ROUND(SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) * 1.0 / COUNT(*), 2) AS conversion_rate
+    FROM attributions
+    WHERE deleted_at IS NULL
+    GROUP BY utm_source, utm_campaign
+
+- id: orders_per_country
+  question: How many orders, of any status, came from customers in each country?
+  sql: |
+    SELECT c.country, COUNT(*) AS orders
+    FROM orders o JOIN customers c ON o.user_id = c.id
+    WHERE o.deleted_at IS NULL AND c.deleted_at IS NULL
+    GROUP BY c.country
+
+- id: checkout_success_rate
+  question: What is the overall checkout success rate, as a fraction of all checkouts?
+  sql: |
+    SELECT ROUND(SUM(CASE WHEN status = 'SHIPPED' THEN 1 ELSE 0 END) * 1.0 / COUNT(*), 2) AS success_rate
+    FROM orders
+    WHERE deleted_at IS NULL
+
+- id: revenue_by_category
+  question: What is the revenue of each product category?
+  sql: |
+    SELECT i.category, ROUND(SUM(o.total_amount), 2) AS revenue
+    FROM orders o JOIN inventory i ON o.product_id = i.product_id
+    WHERE o.deleted_at IS NULL AND i.deleted_at IS NULL AND o.status IN ('PAID', 'SHIPPED')
+    GROUP BY i.category
+
+- id: shipments_per_carrier
+  question: How many shipments has each carrier handled?
+  sql: |
+    SELECT carrier, COUNT(*) AS shipments
+    FROM shipments
+    WHERE deleted_at IS NULL
+    GROUP BY carrier
+
+- id: cac_per_campaign
+  question: What is the customer acquisition cost of each paid campaign?
+  sql: |
+    SELECT c.utm_source, c.utm_campaign, ROUND(c.ad_spend / COUNT(DISTINCT a.user_id), 4) AS cac
+    FROM campaigns c
+    JOIN attributions a ON a.utm_source = c.utm_source AND a.utm_campaign = c.utm_campaign
+    WHERE c.deleted_at IS NULL AND a.deleted_at IS NULL AND a.order_id IS NOT NULL AND c.ad_spend > 0
+    GROUP BY c.utm_source, c.utm_campaign, c.ad_spend
+
+- id: average_order_value
+  question: What is the average order value of successful orders?
+  sql: |
+    SELECT ROUND(AVG(total_amount), 2) AS average_order_value
+    FROM orders
+    WHERE deleted_at IS NULL AND status IN ('PAID', 'SHIPPED')
+
+- id: customers_per_tier
+  question: How many customers are in each loyalty tier?
+  sql: |
+    SELECT loyalty_tier, COUNT(*) AS customers
+    FROM customers
+    WHERE deleted_at IS NULL
+    GROUP BY loyalty_tier
+
+- id: declined_amount_by_method
+  question: What is the total declined payment amount for each payment method?
+  sql: |
+    SELECT method, ROUND(SUM(amount), 2) AS declined_amount
+    FROM payments
+    WHERE deleted_at IS NULL AND status = 'DECLINED'
+    GROUP BY method
+
+- id: cleared_revenue_by_source
+  question: How much cleared revenue did each traffic source (utm_source) bring in?
+  sql: |
+    SELECT a.utm_source, ROUND(SUM(p.amount), 2) AS cleared_revenue
+    FROM attributions a JOIN payments p ON p.order_id = a.order_id
+    WHERE a.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status = 'SUCCESS'
+    GROUP BY a.utm_source
+
+- id: top_countries_by_revenue
+  question: Which 3 customer countries generate the most revenue?
+  ordered: true
+  sql: |
+    SELECT c.country, ROUND(SUM(o.total_amount), 2) AS revenue
+    FROM orders o JOIN customers c ON o.user_id = c.id
+    WHERE o.deleted_at IS NULL AND c.deleted_at IS NULL AND o.status IN ('PAID', 'SHIPPED')
+    GROUP BY c.country
+    ORDER BY revenue DESC
+    LIMIT 3
+
+- id: suspended_customers
+  question: How many customers are currently suspended?
+  sql: |
+    SELECT COUNT(*) AS suspended_customers
+    FROM customers
+    WHERE deleted_at IS NULL AND status = 'SUSPENDED'

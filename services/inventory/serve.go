@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/httpserver"
@@ -76,12 +77,18 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		return err
 	}
 
+	chaosKnobs, err := chaos.NewStore(serviceName, logger, restocker.ChaosKnobs()...)
+	if err != nil {
+		return err
+	}
+
 	handler := inventory.NewHandler(repo)
+	chaosActions := inventory.NewChaosActions(repo, logger)
 	router := httpserver.NewRouter(httpserver.RouterConfig{
 		ServiceName:    serviceName,
 		Logger:         logger,
 		Ready:          func(ctx context.Context) error { return database.Ping(ctx, db) },
-		RegisterRoutes: handler.RegisterRoutes,
+		RegisterRoutes: chaosKnobs.Routes(handler.RegisterRoutes, chaosActions.RegisterRoutes),
 	})
 
 	// The HTTP server and the restock loop share one lifetime. A shutdown

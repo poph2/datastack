@@ -23,6 +23,7 @@ func peerServer(t *testing.T, status int, body string) (*httpclient.Client, *map
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&received)
 		received["_path"] = r.Method + " " + r.URL.Path
+		received["_query"] = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
@@ -85,6 +86,27 @@ func TestPaymentClient(t *testing.T) {
 	client, _ = peerServer(t, http.StatusConflict, `{"error":"ALREADY_PAID","message":"paid"}`)
 	err = NewPaymentClient(client).Charge(context.Background(), 9, decimal.NewFromInt(1))
 	assert.NoError(t, err, "an order that is already paid counts as paid")
+}
+
+func TestPaymentClientPaid(t *testing.T) {
+	client, received := peerServer(t, http.StatusOK,
+		`{"payments":[{"payment_id":4,"order_id":9,"amount":"99.98","method":"PAYPAL","status":"SUCCESS"}]}`)
+
+	paid, err := NewPaymentClient(client).Paid(context.Background(), 9)
+
+	require.NoError(t, err)
+	assert.True(t, paid)
+	assert.Equal(t, "GET /payments", (*received)["_path"])
+	assert.Equal(t, "order_id=9&status=SUCCESS", (*received)["_query"])
+
+	client, _ = peerServer(t, http.StatusOK, `{"payments":[]}`)
+	paid, err = NewPaymentClient(client).Paid(context.Background(), 9)
+	require.NoError(t, err)
+	assert.False(t, paid)
+
+	client, _ = peerServer(t, http.StatusInternalServerError, `{"error":"INTERNAL_ERROR","message":"x"}`)
+	_, err = NewPaymentClient(client).Paid(context.Background(), 9)
+	assert.Error(t, err, "an unknown answer is an error, never 'not paid'")
 }
 
 func TestMarketingClient(t *testing.T) {

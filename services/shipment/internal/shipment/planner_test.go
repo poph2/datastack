@@ -1,12 +1,15 @@
 package shipment
 
 import (
+	"context"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 var defaultPlanConfig = PlanConfig{
@@ -95,6 +98,22 @@ func TestPackingDelay(t *testing.T) {
 	assert.Equal(t, 30000, highest.packingDelayMS("SILVER"))
 	assert.Equal(t, 15000, highest.packingDelayMS("GOLD"), "GOLD is packed in half the time")
 	assert.Equal(t, 1000, lowest.packingDelayMS("GOLD"))
+}
+
+func TestPackingDelayFollowsLiveChaosFactor(t *testing.T) {
+	planner := newTestPlanner(t, func(int) int { return 0 })
+	store, err := chaos.NewStore("shipment-service-test", discardLogger, planner.ChaosKnobs()...)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Apply(context.Background(), map[string]float64{"packing_delay_factor": 2.5}))
+	assert.Equal(t, 5000, planner.packingDelayMS(""))
+	assert.Equal(t, 2500, planner.packingDelayMS("GOLD"), "the factor stacks with the GOLD discount")
+
+	store.Reset(context.Background())
+	assert.Equal(t, 2000, planner.packingDelayMS(""))
+
+	err = store.Apply(context.Background(), map[string]float64{"packing_delay_factor": 0.5})
+	assert.ErrorIs(t, err, chaos.ErrInvalidChange, "the factor never speeds packing up")
 }
 
 func TestPackingDelayStaysInRange(t *testing.T) {

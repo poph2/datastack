@@ -175,10 +175,13 @@ load:
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) apply -f deploy/k6/deployment.yaml
 	$(KUBECTL) set env deployment/k6 RATE=$(RATE)
+	$(KUBECTL) scale deployment/k6 --replicas=1
 	$(KUBECTL) rollout restart deployment/k6
 
+# Scales k6 to zero rather than deleting it, so the web UI's load page can
+# start it again.
 load-stop:
-	$(KUBECTL) delete deployment k6 --ignore-not-found
+	$(KUBECTL) scale deployment/k6 --replicas=0
 
 status:
 	$(KUBECTL) get pods,databases.postgresql.cnpg.io

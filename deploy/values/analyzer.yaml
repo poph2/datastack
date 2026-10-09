@@ -1,0 +1,65 @@
+# Analyzer Service. Deployed as release "analyzer-service", which is also its
+# in-cluster DNS name: http://analyzer-service:8086. It answers business
+# questions by generating SQL over StarRocks analytics_db with an LLM.
+# Needs StarRocks (make analytics) with the CDC tables loaded, and an LLM:
+# by default Ollama running on the host Mac, reached from kind pods through
+# host.docker.internal.
+image:
+  repository: datastack/analyzer
+
+port: 8086
+
+# It owns no Postgres database: no CNPG Database, no migrate initContainer.
+postgres:
+  database: ""
+
+migrations:
+  enabled: false
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  STARROCKS_ADDR: "starrocks:9030"
+  STARROCKS_DB: analytics_db
+  # Admin user: reads information_schema and manages the read-only user.
+  STARROCKS_USER: root
+  # Every generated query runs as this user, granted SELECT on analytics_db
+  # only. The service creates it and re-grants on every schema refresh.
+  READONLY_USER: analyzer_ro
+  SCHEMA_REFRESH_INTERVAL: 1m
+  LLM_PROVIDER: ollama
+  # Empty: qwen2.5-coder:latest for ollama, claude-opus-5-5 for anthropic.
+  MODEL: ""
+  OLLAMA_URL: "http://host.docker.internal:11434"
+  OLLAMA_NUM_CTX: "8192"
+  # Keeps the model and its cached system prompt loaded between questions.
+  OLLAMA_KEEP_ALIVE: 30m
+  # Asks one throwaway question at start-up so Ollama caches the prompt.
+  WARM_UP: "true"
+  # Without a GPU (Intel Macs), Ollama runs on the CPU: the first question
+  # after the model loads must process the whole ~4k-token schema prompt,
+  # which takes minutes. Later questions reuse it and take seconds.
+  LLM_TIMEOUT: 300s
+  MAX_ATTEMPTS: "2"
+  MAX_ROWS: "500"
+  QUERY_TIMEOUT: 15s
+
+# Only used with LLM_PROVIDER=anthropic. Optional, so the chart installs
+# without it:
+#   kubectl --context kind-datastack create secret generic analyzer-anthropic \
+#     --from-literal=api-key="$ANTHROPIC_API_KEY"
+secretEnv:
+  ANTHROPIC_API_KEY:
+    secret: analyzer-anthropic
+    key: api-key
+    optional: true
+
+# Waits on the LLM most of the time, so CPU stays low. Result sets are capped
+# at MAX_ROWS, so the chart's default memory limit is plenty.
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi

@@ -1,0 +1,110 @@
+# The demo control center (apps/web): ask the data, chaos knobs, k6 load.
+# The browser talks only to this pod; its Next.js route handlers call the
+# analyzer and the six services over in-cluster Service DNS, and the
+# Kubernetes API for k6.
+#
+#   docker build -t datastack/web:dev1 apps/web
+#   kind load docker-image datastack/web:dev1 --name datastack
+#   kubectl --context kind-datastack apply -f deploy/web/
+#   kubectl --context kind-datastack set image deploy/web web=datastack/web:dev1
+#   kubectl --context kind-datastack port-forward svc/web 3001:3001
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: datastack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+        app.kubernetes.io/part-of: datastack
+    spec:
+      serviceAccountName: web
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: datastack/web:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            # Browser-facing: the presenter's `make grafana` port-forward.
+            - name: GRAFANA_URL
+              value: http://localhost:3000
+            - name: ANALYZER_URL
+              value: http://analyzer-service:8086
+            - name: ORDER_URL
+              value: http://order-service:8080
+            - name: CUSTOMER_URL
+              value: http://customer-service:8081
+            - name: MARKETING_URL
+              value: http://marketing-service:8082
+            - name: INVENTORY_URL
+              value: http://inventory-service:8083
+            - name: PAYMENT_URL
+              value: http://payment-service:8084
+            - name: SHIPMENT_URL
+              value: http://shipment-service:8085
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          # Generous timeouts: on a loaded laptop node a starved Node.js
+          # process answers slowly, and a restart only makes that worse.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: datastack
+spec:
+  selector:
+    app.kubernetes.io/name: web
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http

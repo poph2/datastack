@@ -5,6 +5,8 @@ import (
 	"math/rand/v2"
 	"strings"
 	"time"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 const (
@@ -18,6 +20,9 @@ const (
 	upsTrackingLength = 16
 	fedExTrackingLen  = 12
 	dhlTrackingLen    = 10
+
+	// maxPackingDelayFactor bounds the packing_delay_factor chaos knob.
+	maxPackingDelayFactor = 20
 
 	digits       = "0123456789"
 	alphanumeric = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -64,6 +69,9 @@ type Plan struct {
 // shipments.
 type Planner struct {
 	config PlanConfig
+	// delayFactor multiplies the packing delay of new shipments. A chaos
+	// knob, so a demo can slow the warehouse down live.
+	delayFactor *chaos.Knob
 	// intN returns a random int in [0, n). Tests replace it.
 	intN func(n int) int
 }
@@ -80,7 +88,22 @@ func NewPlanner(config PlanConfig) (*Planner, error) {
 	if config.GoldDelayFactor <= 0 || config.GoldDelayFactor > 1 {
 		return nil, fmt.Errorf("gold delay factor must be in (0, 1], got %g", config.GoldDelayFactor)
 	}
-	return &Planner{config: config, intN: rand.IntN}, nil
+	delayFactor, err := chaos.NewKnob(chaos.Spec{
+		Name:        "packing_delay_factor",
+		Description: "Multiplier applied to the packing delay of new shipments (1 is normal speed).",
+		Default:     1,
+		Min:         1,
+		Max:         maxPackingDelayFactor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Planner{config: config, delayFactor: delayFactor, intN: rand.IntN}, nil
+}
+
+// ChaosKnobs returns the planner's runtime knobs, for the chaos store.
+func (p *Planner) ChaosKnobs() []*chaos.Knob {
+	return []*chaos.Knob{p.delayFactor}
 }
 
 // Plan decides how an order travels to destinationCountry. loyaltyTier is
@@ -137,14 +160,15 @@ func (p *Planner) randomString(alphabet string, length int) string {
 	return b.String()
 }
 
-// packingDelayMS draws a delay uniformly from [min, max], in milliseconds.
+// packingDelayMS draws a delay uniformly from [min, max], in milliseconds,
+// then applies the GOLD discount and the live chaos factor.
 func (p *Planner) packingDelayMS(loyaltyTier string) int {
 	minMS := int(p.config.PackingDelayMin.Milliseconds())
 	maxMS := int(p.config.PackingDelayMax.Milliseconds())
 
-	delay := minMS + p.intN(maxMS-minMS+1)
+	delay := float64(minMS + p.intN(maxMS-minMS+1))
 	if loyaltyTier == loyaltyTierGold {
-		delay = int(float64(delay) * p.config.GoldDelayFactor)
+		delay *= p.config.GoldDelayFactor
 	}
-	return delay
+	return int(delay * p.delayFactor.Value())
 }

@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/httpserver"
 )
 
@@ -198,4 +200,78 @@ func TestReservationMetrics(t *testing.T) {
 	metrics := doRequest(router, http.MethodGet, "/metrics", "").Body.String()
 	assert.Contains(t, metrics, `inventory_reservations_total{outcome="reserved"}`)
 	assert.Contains(t, metrics, `inventory_reservations_total{outcome="out_of_stock"}`)
+}
+
+// fakeDrainer drains the first n products with stock, in ID order.
+type fakeDrainer struct {
+	store *fakeStore
+	err   error
+}
+
+func (d fakeDrainer) DrainStock(ctx context.Context, products int) ([]string, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	all, _ := d.store.List(ctx)
+	var drained []string
+	for _, p := range all {
+		if len(drained) == products {
+			break
+		}
+		if p.StockLevel > 0 {
+			p.StockLevel = 0
+			d.store.products[p.ProductID] = p
+			drained = append(drained, p.ProductID)
+		}
+	}
+	return drained, nil
+}
+
+func newChaosRouter(t *testing.T, drainer Drainer) *gin.Engine {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	knobs, err := chaos.NewStore("inventory-service-test", logger)
+	require.NoError(t, err)
+	return httpserver.NewRouter(httpserver.RouterConfig{
+		ServiceName:    "inventory-service-test",
+		Logger:         logger,
+		Ready:          func(context.Context) error { return nil },
+		RegisterRoutes: knobs.Routes(NewHandler(newFakeStore()).RegisterRoutes, NewChaosActions(drainer, logger).RegisterRoutes),
+	})
+}
+
+func TestDrainStock(t *testing.T) {
+	store := newFakeStore(
+		product("PROD_A", "APPAREL", 5, "1.99"),
+		product("PROD_B", "APPAREL", 0, "1.99"),
+		product("PROD_C", "APPAREL", 9, "1.99"),
+		product("PROD_D", "APPAREL", 3, "1.99"),
+	)
+	router := newChaosRouter(t, fakeDrainer{store: store})
+
+	rec := doRequest(router, http.MethodPost, "/admin/chaos/drain-stock", `{"products": 2}`)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"drained": 2, "product_ids": ["PROD_A", "PROD_C"]}`, rec.Body.String())
+	assert.Zero(t, store.products["PROD_C"].StockLevel)
+	assert.Equal(t, 3, store.products["PROD_D"].StockLevel)
+}
+
+func TestDrainStockRejectsInvalidInput(t *testing.T) {
+	router := newChaosRouter(t, fakeDrainer{store: newFakeStore()})
+
+	for _, body := range []string{`{}`, `{"products": 0}`, `{"products": 101}`, `{"products": "x"}`, `{`} {
+		rec := doRequest(router, http.MethodPost, "/admin/chaos/drain-stock", body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, body)
+		assert.Equal(t, httpserver.CodeInvalidRequest, decode[httpserver.ErrorResponse](t, rec).Error)
+	}
+}
+
+func TestDrainStockFailureIs500(t *testing.T) {
+	router := newChaosRouter(t, fakeDrainer{err: errors.New("database down")})
+
+	rec := doRequest(router, http.MethodPost, "/admin/chaos/drain-stock", `{"products": 1}`)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "database down")
 }

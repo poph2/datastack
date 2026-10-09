@@ -32,6 +32,13 @@ env:
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   OTEL_RESOURCE_ATTRIBUTES: deployment.environment=kind
 
+# Environment variables read from Secrets, for settings that must not sit in
+# the ConfigMap. With optional: true the pod starts even when the Secret (or
+# key) doesn't exist, and the variable is simply unset. Example:
+#   secretEnv:
+#     ANTHROPIC_API_KEY: {secret: analyzer-anthropic, key: api-key, optional: true}
+secretEnv: {}
+
 postgres:
   # CloudNativePG Cluster this service's database lives in.
   cluster: datastack-pg

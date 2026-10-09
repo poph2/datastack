@@ -179,6 +179,47 @@ func TestRestockBelow(t *testing.T) {
 	assert.Zero(t, restocked)
 }
 
+func TestRepositoryDrainStock(t *testing.T) {
+	repo, db := newTestRepository(t)
+	ctx := context.Background()
+
+	// Leave exactly five live products with stock: three to drain from, one
+	// already empty, one soft-deleted.
+	require.NoError(t, db.Exec("UPDATE inventory SET stock_level = 0").Error)
+	for _, id := range []string{"T_A", "T_B", "T_C", "T_D", "T_E"} {
+		insertProduct(t, db, id, 7, true)
+	}
+	insertProduct(t, db, "T_EMPTY", 0, true)
+	deleted := insertProduct(t, db, "T_DELETED", 7, true)
+	require.NoError(t, db.Delete(&deleted).Error)
+
+	drained, err := repo.DrainStock(ctx, 3)
+	require.NoError(t, err)
+	require.Len(t, drained, 3)
+	assert.IsIncreasing(t, drained, "product IDs come back sorted")
+	for _, id := range drained {
+		p, err := repo.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Zero(t, p.StockLevel, id)
+		assert.NotContains(t, []string{"T_EMPTY", "T_DELETED"}, id, "only live products with stock are drained")
+	}
+
+	// Asking for more than remain drains just the rest.
+	rest, err := repo.DrainStock(ctx, 100)
+	require.NoError(t, err)
+	assert.Len(t, rest, 2)
+	assert.NotContains(t, rest, drained[0])
+
+	var deletedStock int
+	require.NoError(t, db.Unscoped().Model(&Product{}).Where("product_id = ?", "T_DELETED").
+		Select("stock_level").Scan(&deletedStock).Error)
+	assert.Equal(t, 7, deletedStock, "soft-deleted products are untouched")
+
+	none, err := repo.DrainStock(ctx, 5)
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	repo, db := newTestRepository(t)
 	ctx := context.Background()

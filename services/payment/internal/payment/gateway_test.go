@@ -2,11 +2,15 @@ package payment
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 func TestNewGatewayValidatesConfig(t *testing.T) {
@@ -78,6 +82,22 @@ func TestGatewayFailureRateExtremes(t *testing.T) {
 		assert.Equal(t, StatusSuccess, never.decide().Status)
 		assert.Equal(t, StatusDeclined, always.decide().Status)
 	}
+}
+
+func TestGatewayReadsLiveDeclineRate(t *testing.T) {
+	gateway, err := NewGateway(GatewayConfig{FailureRate: 0.05})
+	require.NoError(t, err)
+	gateway.float64 = func() float64 { return 0.5 }
+	store, err := chaos.NewStore("payment-service-test", slog.New(slog.NewTextHandler(io.Discard, nil)), gateway.ChaosKnobs()...)
+	require.NoError(t, err)
+
+	require.Equal(t, StatusSuccess, gateway.decide().Status, "0.5 is above the default rate")
+
+	require.NoError(t, store.Apply(context.Background(), map[string]float64{"decline_rate": 0.9}))
+	assert.Equal(t, StatusDeclined, gateway.decide().Status, "0.5 is below the new rate")
+
+	store.Reset(context.Background())
+	assert.Equal(t, StatusSuccess, gateway.decide().Status, "a reset restores --failure-rate")
 }
 
 func TestGatewayLatencyStaysInRange(t *testing.T) {

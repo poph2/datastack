@@ -20,6 +20,6 @@ var (
 
 	reconciledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "orders_reconciled_total",
-		Help: "Orders stuck in PAID that the reconciler retried, by outcome (shipped, failed).",
+		Help: "Stuck orders the reconciler handled, by outcome: shipped (PAID retried), paid (stranded PENDING was charged), released (stranded PENDING failed, stock released), cancelled (stranded PENDING failed, nothing reserved), failed (attempt failed, retried later).",
 	}, []string{"outcome"})
 )

@@ -141,7 +141,34 @@ UPDATE inventory SET stock_level = stock_level + :quantity
 - **Safe with several replicas, without leader election.** The service refuses to start unless `RESTOCK_QUANTITY >= RESTOCK_THRESHOLD`. That way one run lifts every product it touches to at least the threshold, and a concurrent run from another replica re-checks the `WHERE` clause and finds nothing left to do (covered by a test).
 - Each run is its own root span (`inventory.restock`) and logs the number of products and units restocked. A failed run is logged and the loop carries on.
 - Restocks are `UPDATE`s, so they move `updated_at`, and replenishment shows up in StarRocks as upward steps.
-- `RESTOCK_INTERVAL=0` disables the loop.
+- `RESTOCK_INTERVAL=0` disables the loop. The `restock_paused` chaos knob skips runs at runtime (see [Chaos](#chaos)).
+
+## Chaos
+
+Runtime failure injection for live demos, from the shared [`pkgs/chaos`](../../pkgs/chaos) package:
+
+- `GET /admin/chaos` returns `{"service": "<name>", "knobs": [{"name", "description", "value", "default", "min", "max"}, ...]}`, `latency_ms` first.
+- `PUT /admin/chaos` with a partial object such as `{"latency_ms": 500}` changes those knobs and returns the same body. It is all-or-nothing: an unknown knob or a value outside `[min, max]` (or a fraction for a whole-number knob) is `400 INVALID_REQUEST`, and nothing changes.
+- `DELETE /admin/chaos` resets every knob to its default.
+
+The `/admin` routes are traced, logged and metered like the API, but never delayed by `latency_ms`. Every change is logged at INFO with the old and new value, and the gauge `chaos_knob_value{knob}` shows the current values. **Values live in the pod's memory**: a restart resets every knob to its default, and with several replicas each pod has its own values (every service runs one replica in kind).
+
+| Knob | Range | Default | Effect |
+|---|---|---|---|
+| `latency_ms` | 0 to 5000, whole | `0` | Delay before every API request is handled (not `/admin`, probes or `/metrics`). It ends early if the caller gives up (`503 REQUEST_CANCELLED`), and shows on the request span as the attribute `chaos.latency_ms` plus `chaos.latency.start`/`chaos.latency.end` events |
+| `restock_paused` | 0 or 1 | `0` | `1` makes the background restock skip its runs (the `inventory.restock` span gets `chaos.restock_paused=true`), so stock runs out |
+
+`POST /admin/chaos/drain-stock` with `{"products": 20}` (1 to 100) sets `stock_level = 0` on that many randomly chosen live products that still have stock, and returns `{"drained": 20, "product_ids": ["PROD_0007", ...]}` (fewer if fewer have stock). It is one statement, so it can't race a reservation into negative stock:
+
+```sql
+UPDATE inventory SET stock_level = 0
+ WHERE id IN (SELECT id FROM inventory WHERE stock_level > 0 AND deleted_at IS NULL
+              ORDER BY random() LIMIT :products)
+   AND deleted_at IS NULL
+RETURNING product_id;
+```
+
+Drained auto-restock products come back on the next restock run (unless `restock_paused` is 1); scarce ones (`auto_restock = false`) stay sold out. It is an `UPDATE`, so the CDC daemon sees every drained row.
 
 ## Interactions
 

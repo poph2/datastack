@@ -11,6 +11,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 type fakePackStore struct {
@@ -88,6 +90,28 @@ func metricValue(t *testing.T, name, carrier string) float64 {
 		}
 	}
 	return 0
+}
+
+func TestPackOnceFollowsLiveCapacity(t *testing.T) {
+	store := &fakePackStore{pending: 5}
+	packer, err := NewPacker(store, PackConfig{Interval: time.Second, Capacity: 10}, discardLogger)
+	require.NoError(t, err)
+	knobs, err := chaos.NewStore("shipment-service-test", discardLogger, packer.ChaosKnobs()...)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, knobs.Apply(ctx, map[string]float64{"ship_capacity": 3}))
+	packer.packOnce(ctx)
+	assert.Equal(t, 3, store.limit)
+
+	require.NoError(t, knobs.Apply(ctx, map[string]float64{"ship_capacity": 0}))
+	packer.packOnce(ctx)
+	assert.Equal(t, 1, store.shipCalls, "capacity 0 pauses shipping")
+	assert.InDelta(t, 5, metricValue(t, "shipments_pending", ""), 0, "the backlog is still measured while paused")
+
+	knobs.Reset(ctx)
+	packer.packOnce(ctx)
+	assert.Equal(t, 10, store.limit, "a reset restores --ship-capacity")
 }
 
 func TestPackOnceSurvivesErrors(t *testing.T) {

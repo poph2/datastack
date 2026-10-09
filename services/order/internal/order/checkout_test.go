@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -15,16 +16,19 @@ import (
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// fakeStore is an in-memory Store and StuckStore with Repository's guarded
-// transition semantics.
+// fakeStore is an in-memory Store with Repository's guarded transition
+// semantics, including the updated_at guard.
 type fakeStore struct {
 	mu     sync.Mutex
 	orders map[uint64]Order
 	nextID uint64
+	// clock stands in for the database clock: it ticks on every write, so
+	// updated_at always moves.
+	clock time.Time
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{orders: map[uint64]Order{}, nextID: 1}
+	return &fakeStore{orders: map[uint64]Order{}, nextID: 1, clock: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 }
 
 func (s *fakeStore) Create(ctx context.Context, o *Order) error {
@@ -35,6 +39,8 @@ func (s *fakeStore) Create(ctx context.Context, o *Order) error {
 	defer s.mu.Unlock()
 	o.ID = s.nextID
 	s.nextID++
+	now := s.tick()
+	o.CreatedAt, o.UpdatedAt = now, now
 	s.orders[o.ID] = *o
 	return nil
 }
@@ -59,10 +65,11 @@ func (s *fakeStore) Apply(ctx context.Context, id uint64, t Transition) (Order, 
 	if !ok {
 		return Order{}, ErrNotFound
 	}
-	if o.Status != t.From {
+	if o.Status != t.From || (t.UnchangedSince != nil && !o.UpdatedAt.Equal(*t.UnchangedSince)) {
 		return Order{}, ErrStatusChanged
 	}
 	o.Status = t.To
+	o.UpdatedAt = s.tick()
 	if t.UnitPrice != nil {
 		o.UnitPrice = t.UnitPrice
 	}
@@ -76,6 +83,12 @@ func (s *fakeStore) Apply(ctx context.Context, id uint64, t Transition) (Order, 
 	return o, nil
 }
 
+// tick advances the fake database clock. The caller holds mu.
+func (s *fakeStore) tick() time.Time {
+	s.clock = s.clock.Add(time.Millisecond)
+	return s.clock
+}
+
 // fakePeers records every call and returns configured results.
 type fakePeers struct {
 	customer    Customer
@@ -85,6 +98,9 @@ type fakePeers struct {
 	chargeErr   error
 	shipErr     error
 	marketErr   error
+	paid        bool
+	paidErr     error
+	releaseErr  error
 
 	reserved, released, charged, shipped, converted int
 	chargedAmount                                   decimal.Decimal
@@ -106,6 +122,9 @@ func (p *fakePeers) Reserve(context.Context, string, int) (decimal.Decimal, erro
 }
 
 func (p *fakePeers) Release(context.Context, string, int) error {
+	if p.releaseErr != nil {
+		return p.releaseErr
+	}
 	p.released++
 	return nil
 }
@@ -114,6 +133,10 @@ func (p *fakePeers) Charge(_ context.Context, _ uint64, amount decimal.Decimal) 
 	p.charged++
 	p.chargedAmount = amount
 	return p.chargeErr
+}
+
+func (p *fakePeers) Paid(context.Context, uint64) (bool, error) {
+	return p.paid, p.paidErr
 }
 
 func (p *fakePeers) RecordConversion(_ context.Context, _, _ uint64, amount decimal.Decimal) error {

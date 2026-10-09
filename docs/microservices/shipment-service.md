@@ -148,7 +148,7 @@ RETURNING shipments.*;
 ```
 
 - **Postgres is the only clock.** Whether a row is due is decided in SQL against `NOW()`, the same clock that set `created_at`, and `shipped_at` is `NOW()` too. The pod never computes a time, so clock skew can't ship a box early, late, or with a negative time-to-ship.
-- **Load-sensitive latency.** At most `SHIP_CAPACITY` boxes ship per tick, per replica, oldest first. Under a k6 burst, due rows queue up and time-to-ship grows beyond the packing delay. That's what makes "is fulfillment slowing down under load?" show up in the dashboards. Scaling the Deployment adds warehouse capacity.
+- **Load-sensitive latency.** At most `SHIP_CAPACITY` boxes ship per tick, per replica, oldest first (the live `ship_capacity` chaos knob, whose default is `SHIP_CAPACITY`; `0` pauses shipping, see [Chaos](#chaos)). Under a k6 burst, due rows queue up and time-to-ship grows beyond the packing delay. That's what makes "is fulfillment slowing down under load?" show up in the dashboards. Scaling the Deployment adds warehouse capacity.
 - **Safe with several replicas, without leader election.** `FOR UPDATE SKIP LOCKED` means a replica skips rows another one is shipping instead of waiting for them, and a row already shipped fails the `status = 'PENDING'` re-check. An integration test runs 8 concurrent packers over 60 due rows and checks every row is shipped exactly once.
 - **Why a CTE, and why raw SQL.** The selection is a `MATERIALIZED` CTE so it runs exactly once. With `WHERE id IN (SELECT ... LIMIT ... FOR UPDATE)` the planner may rescan the subquery and lock (and ship) more than the capacity. GORM has no builder for an `UPDATE` driven by a locking CTE, so this one statement is `db.Raw`. Everything else goes through GORM.
 - **Backlog gauge.** Each tick also counts the `PENDING` rows (served by the small partial index `idx_shipments_pending`) into `shipments_pending`.
@@ -168,6 +168,22 @@ The original spec had `POST /shipments/create` push the shipment ID onto a buffe
 | Moving parts | Channel, pool, queue size, sweeper | One ticker, one query |
 
 The cost is up to one `SHIP_INTERVAL` of extra latency per box (1s by default), which is noise next to 2–30s of packing.
+
+## Chaos
+
+Runtime failure injection for live demos, from the shared [`pkgs/chaos`](../../pkgs/chaos) package:
+
+- `GET /admin/chaos` returns `{"service": "<name>", "knobs": [{"name", "description", "value", "default", "min", "max"}, ...]}`, `latency_ms` first.
+- `PUT /admin/chaos` with a partial object such as `{"latency_ms": 500}` changes those knobs and returns the same body. It is all-or-nothing: an unknown knob or a value outside `[min, max]` (or a fraction for a whole-number knob) is `400 INVALID_REQUEST`, and nothing changes.
+- `DELETE /admin/chaos` resets every knob to its default.
+
+The `/admin` routes are traced, logged and metered like the API, but never delayed by `latency_ms`. Every change is logged at INFO with the old and new value, and the gauge `chaos_knob_value{knob}` shows the current values. **Values live in the pod's memory**: a restart resets every knob to its default, and with several replicas each pod has its own values (every service runs one replica in kind).
+
+| Knob | Range | Default | Effect |
+|---|---|---|---|
+| `latency_ms` | 0 to 5000, whole | `0` | Delay before every API request is handled (not `/admin`, probes or `/metrics`). It ends early if the caller gives up (`503 REQUEST_CANCELLED`), and shows on the request span as the attribute `chaos.latency_ms` plus `chaos.latency.start`/`chaos.latency.end` events |
+| `packing_delay_factor` | 1 to 20 | `1` | Multiplies the packing delay drawn for **new** shipments (after the GOLD discount). Shipments already created keep their delay |
+| `ship_capacity` | 0 to 1000, whole | `SHIP_CAPACITY` | Boxes shipped per packer run, read live. `0` pauses shipping: the backlog (`shipments_pending`) keeps growing and is still measured |
 
 ## Interactions
 
@@ -200,7 +216,7 @@ Every flag can also be set as an environment variable (`--ship-capacity` ↔ `SH
 | `--packing-delay-max` / `PACKING_DELAY_MAX` | `30s` | Must be at least the min |
 | `--gold-delay-factor` / `GOLD_DELAY_FACTOR` | `0.5` | In (0, 1]. `1` turns VIP priority off |
 | `--ship-interval` / `SHIP_INTERVAL` | `1s` | Go duration. `0` disables the packer |
-| `--ship-capacity` / `SHIP_CAPACITY` | `10` | Boxes shipped per tick, per replica. At least 1 |
+| `--ship-capacity` / `SHIP_CAPACITY` | `10` | Boxes shipped per tick, per replica. At least 1 (and at most 1000, the knob's range). Default of the `ship_capacity` chaos knob |
 | `--log-level`, `--log-format`, `OTEL_EXPORTER_OTLP_ENDPOINT` | | As for every service |
 
 The original spec's `PACKING_WORKERS`, `PACKING_QUEUE_SIZE` and `GOLD_PRIORITY` are gone: capacity replaces the worker pool, there is no queue, and GOLD priority is always on (set the factor to `1` to disable it).

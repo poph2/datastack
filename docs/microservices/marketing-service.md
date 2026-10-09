@@ -156,6 +156,20 @@ The spec's `200` body was `{"attribution_id", "order_id"}`. It now returns the f
 
 `GET /healthz`, `GET /readyz` (pings Postgres), `GET /metrics`.
 
+## Chaos
+
+Runtime failure injection for live demos, from the shared [`pkgs/chaos`](../../pkgs/chaos) package:
+
+- `GET /admin/chaos` returns `{"service": "<name>", "knobs": [{"name", "description", "value", "default", "min", "max"}, ...]}`, `latency_ms` first.
+- `PUT /admin/chaos` with a partial object such as `{"latency_ms": 500}` changes those knobs and returns the same body. It is all-or-nothing: an unknown knob or a value outside `[min, max]` (or a fraction for a whole-number knob) is `400 INVALID_REQUEST`, and nothing changes.
+- `DELETE /admin/chaos` resets every knob to its default.
+
+The `/admin` routes are traced, logged and metered like the API, but never delayed by `latency_ms`. Every change is logged at INFO with the old and new value, and the gauge `chaos_knob_value{knob}` shows the current values. **Values live in the pod's memory**: a restart resets every knob to its default, and with several replicas each pod has its own values (every service runs one replica in kind).
+
+| Knob | Range | Default | Effect |
+|---|---|---|---|
+| `latency_ms` | 0 to 5000, whole | `0` | Delay before every API request is handled (not `/admin`, probes or `/metrics`). It ends early if the caller gives up (`503 REQUEST_CANCELLED`), and shows on the request span as the attribute `chaos.latency_ms` plus `chaos.latency.start`/`chaos.latency.end` events |
+
 ## Interactions
 
 ```mermaid

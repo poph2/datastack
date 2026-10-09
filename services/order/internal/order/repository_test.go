@@ -131,6 +131,63 @@ func TestRepository(t *testing.T) {
 	})
 }
 
+// backdate moves an order's updated_at into the past with the trigger off,
+// since the trigger would reset it.
+func backdate(t *testing.T, db *gorm.DB, id uint64, age string) {
+	t.Helper()
+	require.NoError(t, db.Exec("ALTER TABLE orders DISABLE TRIGGER orders_set_updated_at").Error)
+	require.NoError(t, db.Exec("UPDATE orders SET updated_at = NOW() - ?::interval WHERE id = ?", age, id).Error)
+	require.NoError(t, db.Exec("ALTER TABLE orders ENABLE TRIGGER orders_set_updated_at").Error)
+}
+
+func TestStuckPending(t *testing.T) {
+	repo, db := newTestRepository(t)
+	ctx := context.Background()
+
+	fresh := newPendingOrder(t, repo)
+	stale := newPendingOrder(t, repo)
+	backdate(t, db, stale.ID, "5 minutes")
+	paid := newPendingOrder(t, repo)
+	_, err := repo.Apply(ctx, paid.ID, Transition{From: StatusPending, To: StatusPaid})
+	require.NoError(t, err)
+	backdate(t, db, paid.ID, "5 minutes")
+
+	orders, err := repo.StuckPending(ctx, 2*time.Minute, 10)
+
+	require.NoError(t, err)
+	require.Len(t, orders, 1, "only the old PENDING order: not %d (fresh) or %d (PAID)", fresh.ID, paid.ID)
+	assert.Equal(t, stale.ID, orders[0].ID)
+}
+
+func TestApplyUnchangedSinceClaimsOnce(t *testing.T) {
+	repo, db := newTestRepository(t)
+	ctx := context.Background()
+	o := newPendingOrder(t, repo)
+	backdate(t, db, o.ID, "5 minutes")
+	read, err := repo.Get(ctx, o.ID)
+	require.NoError(t, err)
+
+	claim := Transition{From: StatusPending, To: StatusPending, UnchangedSince: &read.UpdatedAt}
+	var won atomic.Int32
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() {
+			if _, err := repo.Apply(ctx, o.ID, claim); err == nil {
+				won.Add(1)
+			} else {
+				assert.ErrorIs(t, err, ErrStatusChanged)
+			}
+		})
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, 1, won.Load(), "replicas holding the same read: exactly one claim wins")
+	claimed, err := repo.Get(ctx, o.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPending, claimed.Status)
+	assert.True(t, claimed.UpdatedAt.After(read.UpdatedAt), "the claim moves updated_at")
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	_, db := newTestRepository(t)
 	require.NoError(t, Migrate(context.Background(), db))

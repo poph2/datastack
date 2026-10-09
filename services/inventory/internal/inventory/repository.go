@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -111,4 +112,36 @@ func (r *Repository) RestockBelow(ctx context.Context, threshold, quantity int) 
 		return 0, fmt.Errorf("restocking products below %d: %w", threshold, result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+// DrainStock sets stock_level to 0 on up to products randomly chosen live
+// products that still have stock, and returns their product IDs in order.
+//
+// It is one UPDATE whose subquery picks the products, so concurrent
+// reservations either land before it (and the product is drained anyway) or
+// see zero stock after it. The trigger moves updated_at, so the CDC daemon
+// sees every drained row.
+func (r *Repository) DrainStock(ctx context.Context, products int) ([]string, error) {
+	db := r.db.WithContext(ctx)
+	picked := db.Model(&Product{}).
+		Select("id").
+		Where("stock_level > 0").
+		Order("random()").
+		Limit(products)
+
+	var drained []Product
+	result := db.Model(&drained).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "product_id"}}}).
+		Where("id IN (?)", picked).
+		Update("stock_level", 0)
+	if result.Error != nil {
+		return nil, fmt.Errorf("draining stock of %d products: %w", products, result.Error)
+	}
+
+	ids := make([]string, 0, len(drained))
+	for _, p := range drained {
+		ids = append(ids, p.ProductID)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }

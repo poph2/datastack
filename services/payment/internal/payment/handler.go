@@ -34,6 +34,7 @@ var maxAmount = decimal.RequireFromString("99999999.99")
 type Store interface {
 	Create(ctx context.Context, p *Payment) error
 	Get(ctx context.Context, id uint64) (Payment, error)
+	ListByOrder(ctx context.Context, orderID uint64, status Status) ([]Payment, error)
 	Refund(ctx context.Context, id uint64) (Payment, error)
 }
 
@@ -53,6 +54,7 @@ func NewHandler(store Store, gateway *Gateway, methods *MethodPicker) *Handler {
 // RegisterRoutes adds the payment endpoints to api.
 func (h *Handler) RegisterRoutes(api gin.IRouter) {
 	api.POST("/payments/process", h.process)
+	api.GET("/payments", h.listByOrder)
 	api.GET("/payments/:id", h.get)
 	api.POST("/payments/:id/refund", h.refund)
 }
@@ -67,6 +69,15 @@ type processRequest struct {
 
 type paymentURI struct {
 	ID uint64 `uri:"id" binding:"required,min=1"`
+}
+
+type listQuery struct {
+	OrderID uint64 `form:"order_id" binding:"required,min=1"`
+	Status  Status `form:"status" binding:"omitempty,oneof=SUCCESS DECLINED REFUNDED"`
+}
+
+type listResponse struct {
+	Payments []paymentResponse `json:"payments"`
 }
 
 type paymentResponse struct {
@@ -158,6 +169,33 @@ func (h *Handler) get(c *gin.Context) {
 
 	annotateSpan(c, payment)
 	c.JSON(http.StatusOK, toResponse(payment))
+}
+
+// listByOrder returns an order's payment attempts, optionally only those in
+// one status. The Order Service's reconciler uses it to learn whether an
+// order stranded in PENDING was actually paid.
+func (h *Handler) listByOrder(c *gin.Context) {
+	var query listQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		httpserver.RespondInvalidRequest(c, err)
+		return
+	}
+
+	payments, err := h.store.ListByOrder(c.Request.Context(), query.OrderID, query.Status)
+	if err != nil {
+		httpserver.RespondInternalError(c, err)
+		return
+	}
+
+	response := listResponse{Payments: make([]paymentResponse, 0, len(payments))}
+	for _, p := range payments {
+		response.Payments = append(response.Payments, toResponse(p))
+	}
+	trace.SpanFromContext(c.Request.Context()).SetAttributes(
+		attribute.Int64("order.id", int64(query.OrderID)),
+		attribute.Int("payment.count", len(payments)),
+	)
+	c.JSON(http.StatusOK, response)
 }
 
 // refund simulates a customer return: SUCCESS becomes REFUNDED.

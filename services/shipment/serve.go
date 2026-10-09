@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/httpserver"
@@ -43,7 +44,7 @@ func newServeCommand(v *viper.Viper) *cobra.Command {
 	cmd.Flags().Duration(flagPackingDelayMax, 30*time.Second, "longest packing delay for a new shipment")
 	cmd.Flags().Float64(flagGoldDelayFactor, 0.5, "multiplier in (0, 1] applied to the packing delay of GOLD customers")
 	cmd.Flags().Duration(flagShipInterval, time.Second, "how often to ship shipments whose packing delay has passed (0 disables)")
-	cmd.Flags().Int(flagShipCapacity, 10, "most shipments shipped per run, per replica")
+	cmd.Flags().Int(flagShipCapacity, 10, "most shipments shipped per run, per replica (default of the ship_capacity chaos knob)")
 	return cmd
 }
 
@@ -88,12 +89,17 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		return err
 	}
 
+	chaosKnobs, err := chaos.NewStore(serviceName, logger, append(planner.ChaosKnobs(), packer.ChaosKnobs()...)...)
+	if err != nil {
+		return err
+	}
+
 	handler := shipment.NewHandler(repo, planner)
 	router := httpserver.NewRouter(httpserver.RouterConfig{
 		ServiceName:    serviceName,
 		Logger:         logger,
 		Ready:          func(ctx context.Context) error { return database.Ping(ctx, db) },
-		RegisterRoutes: handler.RegisterRoutes,
+		RegisterRoutes: chaosKnobs.Routes(handler.RegisterRoutes),
 	})
 
 	// The HTTP server and the packing loop share one lifetime. A shutdown

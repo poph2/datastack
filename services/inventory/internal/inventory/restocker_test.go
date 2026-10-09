@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 type fakeRestockStore struct {
@@ -54,6 +56,25 @@ func TestRestockOncePassesConfig(t *testing.T) {
 	assert.Equal(t, 1, store.calls)
 	assert.Equal(t, 10, store.threshold)
 	assert.Equal(t, 50, store.quantity)
+}
+
+func TestRestockOnceSkipsWhilePaused(t *testing.T) {
+	store := &fakeRestockStore{}
+	restocker, err := NewRestocker(store, RestockConfig{Interval: time.Minute, Threshold: 10, Quantity: 50}, discardLogger)
+	require.NoError(t, err)
+	knobs, err := chaos.NewStore("inventory-service-test", discardLogger, restocker.ChaosKnobs()...)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, knobs.Apply(ctx, map[string]float64{"restock_paused": 1}))
+	restocker.restockOnce(ctx)
+	assert.Zero(t, store.calls, "a paused restocker doesn't touch stock")
+
+	require.NoError(t, knobs.Apply(ctx, map[string]float64{"restock_paused": 0}))
+	restocker.restockOnce(ctx)
+	assert.Equal(t, 1, store.calls)
+
+	assert.ErrorIs(t, knobs.Apply(ctx, map[string]float64{"restock_paused": 0.5}), chaos.ErrInvalidChange)
 }
 
 func TestRestockOnceSurvivesErrors(t *testing.T) {

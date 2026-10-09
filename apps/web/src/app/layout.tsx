@@ -1,34 +1,31 @@
-import { NavBar } from "@/components/NavBar";
+import { ConfigProvider } from "@/components/ConfigContext";
+import { Sidebar } from "@/components/Sidebar";
+import { grafanaUrl } from "@/lib/config";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { connection } from "next/server";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "DataStack",
-  description: "DataStack live command center",
+  title: "DataStack control center",
+  description: "Ask the data, inject chaos and drive load on the DataStack demo",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Render per request, so GRAFANA_URL is read at runtime, not build time.
+  await connection();
+  const config = { grafanaUrl: grafanaUrl() };
+
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="flex min-h-full flex-col bg-zinc-50 dark:bg-zinc-950">
-        <NavBar />
-        <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
-          {children}
-        </div>
+    <html lang="en" className="h-full antialiased">
+      <body className="min-h-full font-sans">
+        <ConfigProvider value={config}>
+          <div className="flex min-h-screen flex-col lg:flex-row">
+            <Sidebar />
+            <main className="min-w-0 flex-1 px-5 py-6 lg:px-10 lg:py-8">
+              <div className="mx-auto max-w-6xl">{children}</div>
+            </main>
+          </div>
+        </ConfigProvider>
       </body>
     </html>
   );

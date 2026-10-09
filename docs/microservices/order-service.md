@@ -21,7 +21,7 @@ The Order Service is the central nervous system of the ecosystem. Every other se
 - **Transaction state.** Records every checkout attempt and tracks its lifecycle: `PENDING` → `PAID` → `SHIPPED`, or `FAILED` at any step.
 - **Distributed orchestration.** Runs the checkout as an ordered sequence of synchronous calls, releasing reserved stock when payment fails.
 - **Financial record.** Who bought what, when, and for exactly how much (GMV). It also records *why* a failed order failed.
-- **Recovery.** A background reconciler finishes orders that were paid but whose shipment request didn't go through.
+- **Recovery.** A background reconciler finishes orders that were paid but whose shipment request didn't go through, and resolves orders stranded in `PENDING` by a crash mid-checkout.
 
 ## Data Model
 
@@ -50,8 +50,8 @@ Changes from the original spec: `product_id`, `quantity`, `unit_price` and `fail
 ```mermaid
 stateDiagram-v2
   [*] --> PENDING: order row inserted
-  PENDING --> FAILED: customer invalid / suspended, out of stock, payment declined, upstream error
-  PENDING --> PAID: payment SUCCESS
+  PENDING --> FAILED: customer invalid / suspended, out of stock, payment declined, upstream error (or the reconciler, for a stranded unpaid order)
+  PENDING --> PAID: payment SUCCESS (checkout, or the reconciler for a stranded paid order)
   PAID --> SHIPPED: shipment accepted (checkout, or the reconciler later)
   FAILED --> [*]
   SHIPPED --> [*]
@@ -144,11 +144,26 @@ sequenceDiagram
 
 **A started checkout always finishes.** It runs on `context.WithoutCancel` of the request context (keeping the trace), so a caller that disconnects mid-checkout (a k6 pod being replaced, a client timeout) can't strand the order in PENDING with stock reserved. Each peer call keeps its own timeout, so a checkout still can't hang. Load testing on kind found this: restarting k6 cancelled in-flight checkouts halfway.
 
-If releasing stock fails, it's logged at ERROR, and the Inventory restock loop eventually covers the leak. The service isn't a durable saga engine: if the process dies mid-checkout, an order can stay `PENDING` with stock reserved. That's acceptable for the demo.
+If releasing stock fails, it's logged at ERROR, and the Inventory restock loop eventually covers the leak. The service isn't a durable saga engine: if the process dies mid-checkout, an order is stranded in `PENDING`, possibly with stock reserved. The reconciler resolves such orders (below).
 
 ### Reconciler
 
-[`reconciler.go`](../../services/order/internal/order/reconciler.go) runs beside the HTTP server under the `errgroup`, like Inventory's restocker. Every `RECONCILE_INTERVAL` it loads up to 50 orders that have been `PAID` for longer than `RECONCILE_AFTER` (age measured with the database clock), re-reads each customer, and retries the shipment. Retrying is safe because the Shipment Service creates at most one shipment per order, and `PAID → SHIPPED` is guarded, which also makes it safe with several replicas. It never charges again.
+[`reconciler.go`](../../services/order/internal/order/reconciler.go) runs beside the HTTP server under the `errgroup`, like Inventory's restocker. Every `RECONCILE_INTERVAL` it runs two passes under one `order.reconcile` root span. Ages are measured with the database clock (`updated_at < NOW() - interval`), and each pass handles up to 50 orders.
+
+**1. Stranded `PENDING` orders.** It loads orders that have sat untouched in `PENDING` for longer than `PENDING_AFTER` (default `2m`, far above the longest possible checkout: 2s + 2s + 2s + 500ms + 1s of peer timeouts). For each one:
+
+1. **Claim it** with a guarded no-op transition, `UPDATE orders SET status = 'PENDING' WHERE id = ? AND status = 'PENDING' AND updated_at = <the value it read>`. The trigger moves `updated_at`, so a second replica holding the same read (or a checkout that touched the order since) matches nothing and leaves it alone. That is what makes the release below happen at most once.
+2. **Ask the Payment Service** `GET /payments?order_id=<id>&status=SUCCESS`.
+3. **Charged:** `PENDING → PAID` (guarded). The next runs' `PAID` pass ships it once it has been `PAID` for `RECONCILE_AFTER`. Its amount is added to `orders_revenue_total`.
+4. **Not charged:** if the order has a `unit_price`, stock was reserved (the checkout prices the order right after a successful reservation), so it calls `POST /inventory/release`. Then `PENDING → FAILED` with `failure_reason = UPSTREAM_ERROR` (guarded).
+
+If the payment lookup or the release fails, the order stays `PENDING` (its `updated_at` moved with the claim) and is retried once it is older than `PENDING_AFTER` again. An unknown payment state is never treated as "not paid".
+
+Known gap: a checkout that crashes after reserving but before recording `unit_price` leaves an unpriced order, so its stock is not released (the restock loop covers it), and one that crashes between releasing stock after a decline and failing the order gets its stock released twice. Both windows are a single statement wide.
+
+**2. Stuck `PAID` orders.** It loads orders that have been `PAID` for longer than `RECONCILE_AFTER`, re-reads each customer, and retries the shipment. Retrying is safe because the Shipment Service creates at most one shipment per order, and `PAID → SHIPPED` is guarded, which also makes it safe with several replicas. It never charges again.
+
+Each resolved `PENDING` order is an `order.pending_resolved` event on the run's span (with `order.id` and `order.reconcile_outcome`).
 
 ## Service-to-Service Calls
 
@@ -160,6 +175,22 @@ If releasing stock fails, it's logged at ERROR, and the Inventory restock loop e
 - Money is sent as fixed two-decimal strings.
 - **No automatic retries.** Reserve, release and charge aren't idempotent per request.
 - `clients_test.go` replays response bodies copied from each peer's real handler, pinning the contract.
+
+## Chaos
+
+Runtime failure injection for live demos, from the shared [`pkgs/chaos`](../../pkgs/chaos) package:
+
+- `GET /admin/chaos` returns `{"service": "<name>", "knobs": [{"name", "description", "value", "default", "min", "max"}, ...]}`, `latency_ms` first.
+- `PUT /admin/chaos` with a partial object such as `{"latency_ms": 500}` changes those knobs and returns the same body. It is all-or-nothing: an unknown knob or a value outside `[min, max]` (or a fraction for a whole-number knob) is `400 INVALID_REQUEST`, and nothing changes.
+- `DELETE /admin/chaos` resets every knob to its default.
+
+The `/admin` routes are traced, logged and metered like the API, but never delayed by `latency_ms`. Every change is logged at INFO with the old and new value, and the gauge `chaos_knob_value{knob}` shows the current values. **Values live in the pod's memory**: a restart resets every knob to its default, and with several replicas each pod has its own values (every service runs one replica in kind).
+
+| Knob | Range | Default | Effect |
+|---|---|---|---|
+| `latency_ms` | 0 to 5000, whole | `0` | Delay before every API request is handled (not `/admin`, probes or `/metrics`). It ends early if the caller gives up (`503 REQUEST_CANCELLED`), and shows on the request span as the attribute `chaos.latency_ms` plus `chaos.latency.start`/`chaos.latency.end` events |
+
+`latency_ms` here slows every checkout as k6 sees it. On a peer, a `latency_ms` above `CRITICAL_TIMEOUT` (2s) turns that peer's calls into timeouts, so checkouts fail with `UPSTREAM_ERROR`.
 
 ## Configuration
 
@@ -177,6 +208,7 @@ If releasing stock fails, it's logged at ERROR, and the Inventory restock loop e
 | `--shipment-timeout` / `SHIPMENT_TIMEOUT` | `1s` |
 | `--reconcile-interval` / `RECONCILE_INTERVAL` | `30s` (`0` disables) |
 | `--reconcile-after` / `RECONCILE_AFTER` | `30s` |
+| `--pending-after` / `PENDING_AFTER` | `2m` (must exceed the longest checkout) |
 
 ## Running It
 
@@ -192,13 +224,13 @@ make load RATE=10        # continuous k6 journeys inside the cluster
 
 - The checkout server span from `otelgin`, plus one client span per downstream call (`POST inventory-service`, ...). On `FAILED` the server span's status is set to error with the reason, so failed checkouts can be filtered in Tempo.
 - Span attributes: `order.id`, `order.status`, `order.total_amount`, `order.failure_reason`, `customer.id`, `product.id`, `attribution.id`.
-- `order.reconcile` root spans from the reconciler.
+- `order.reconcile` root spans from the reconciler, with `order.stuck_pending` and `order.stuck` counts and one `order.pending_resolved` event per resolved PENDING order.
 
 | Metric | Labels | |
 |---|---|---|
 | `orders_checkouts_total` | `status`, `reason` | Final outcome of each checkout |
 | `orders_revenue_total` | | Dollars of successfully paid orders |
-| `orders_reconciled_total` | `outcome` | Stuck orders retried (`shipped` / `failed`) |
+| `orders_reconciled_total` | `outcome` | Stuck orders the reconciler handled: `shipped` (PAID retried), `paid` (stranded PENDING had been charged), `released` (stranded PENDING failed, stock released), `cancelled` (stranded PENDING failed, nothing reserved), `failed` (attempt failed, retried later) |
 | `http_client_requests_total` | `peer`, `method`, `status` | From `pkgs/httpclient`. `status="error"` means a transport failure or timeout |
 | `http_client_request_duration_seconds` | `peer`, `method` | Latency of each downstream call as the Order Service sees it |
 

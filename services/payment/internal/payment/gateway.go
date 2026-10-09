@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"time"
+
+	"github.com/poph2/datastack/pkgs/chaos"
 )
 
 // declineReasons are drawn uniformly when the gateway declines a charge.
@@ -12,7 +14,8 @@ var declineReasons = []DeclineReason{ReasonCardDeclined, ReasonInsufficientFunds
 
 // GatewayConfig controls the simulated card gateway.
 type GatewayConfig struct {
-	// FailureRate is the share of charges declined, between 0 and 1.
+	// FailureRate is the share of charges declined, between 0 and 1. It is
+	// the default of the decline_rate chaos knob, which can change it live.
 	FailureRate float64
 	// LatencyMin and LatencyMax bound the uniformly random delay before each
 	// decision, so the payment step is visible in traces. Both zero disables it.
@@ -31,6 +34,8 @@ type Decision struct {
 // little, then approves or declines.
 type Gateway struct {
 	config GatewayConfig
+	// declineRate is the live failure rate, read on every charge.
+	declineRate *chaos.Knob
 	// float64 returns a random number in [0, 1). Tests replace it.
 	float64 func() float64
 	// int64N returns a random number in [0, n). Tests replace it.
@@ -39,16 +44,28 @@ type Gateway struct {
 
 // NewGateway validates config and returns a Gateway.
 func NewGateway(config GatewayConfig) (*Gateway, error) {
-	if config.FailureRate < 0 || config.FailureRate > 1 {
-		return nil, fmt.Errorf("failure rate must be between 0 and 1, got %v", config.FailureRate)
-	}
 	if config.LatencyMin < 0 {
 		return nil, fmt.Errorf("latency min must not be negative, got %s", config.LatencyMin)
 	}
 	if config.LatencyMin > config.LatencyMax {
 		return nil, fmt.Errorf("latency min (%s) must not exceed latency max (%s)", config.LatencyMin, config.LatencyMax)
 	}
-	return &Gateway{config: config, float64: rand.Float64, int64N: rand.Int64N}, nil
+	declineRate, err := chaos.NewKnob(chaos.Spec{
+		Name:        "decline_rate",
+		Description: "Share of charges the simulated gateway declines, between 0 and 1.",
+		Default:     config.FailureRate,
+		Min:         0,
+		Max:         1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failure rate: %w", err)
+	}
+	return &Gateway{config: config, declineRate: declineRate, float64: rand.Float64, int64N: rand.Int64N}, nil
+}
+
+// ChaosKnobs returns the gateway's runtime knobs, for the chaos store.
+func (g *Gateway) ChaosKnobs() []*chaos.Knob {
+	return []*chaos.Knob{g.declineRate}
 }
 
 // Authorize simulates the processor's round trip and returns its decision. It
@@ -80,7 +97,7 @@ func (g *Gateway) simulateLatency(ctx context.Context) error {
 }
 
 func (g *Gateway) decide() Decision {
-	if g.float64() >= g.config.FailureRate {
+	if g.float64() >= g.declineRate.Value() {
 		return Decision{Status: StatusSuccess}
 	}
 	reason := declineReasons[g.int64N(int64(len(declineReasons)))]

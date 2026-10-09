@@ -154,6 +154,27 @@ func TestRepository(t *testing.T) {
 		assert.NoError(t, repo.Create(ctx, newPayment(6, StatusSuccess)))
 	})
 
+	t.Run("list by order filters by order and status", func(t *testing.T) {
+		const orderID = 8
+		require.NoError(t, repo.Create(ctx, newPayment(orderID, StatusDeclined)))
+		require.NoError(t, repo.Create(ctx, newPayment(orderID, StatusSuccess)))
+		require.NoError(t, repo.Create(ctx, newPayment(orderID+1, StatusSuccess)))
+
+		all, err := repo.ListByOrder(ctx, orderID, "")
+		require.NoError(t, err)
+		require.Len(t, all, 2)
+		assert.Equal(t, StatusDeclined, all[0].Status, "oldest first")
+
+		success, err := repo.ListByOrder(ctx, orderID, StatusSuccess)
+		require.NoError(t, err)
+		require.Len(t, success, 1)
+		assert.Equal(t, uint64(orderID), success[0].OrderID)
+
+		none, err := repo.ListByOrder(ctx, 999_999, "")
+		require.NoError(t, err)
+		assert.Empty(t, none)
+	})
+
 	t.Run("check constraints", func(t *testing.T) {
 		zeroAmount := newPayment(7, StatusSuccess)
 		zeroAmount.Amount = decimal.Zero

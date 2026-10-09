@@ -56,6 +56,22 @@ func (r *Repository) Get(ctx context.Context, id uint64) (Payment, error) {
 	return p, nil
 }
 
+// ListByOrder returns the live payments for orderID, oldest first. A
+// non-empty status keeps only payments in that status. Filtering on SUCCESS
+// is served by the double-charge guard's partial index.
+func (r *Repository) ListByOrder(ctx context.Context, orderID uint64, status Status) ([]Payment, error) {
+	query := r.db.WithContext(ctx).Where("order_id = ?", orderID)
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	var payments []Payment
+	if err := query.Order("id").Find(&payments).Error; err != nil {
+		return nil, fmt.Errorf("listing payments for order %d: %w", orderID, err)
+	}
+	return payments, nil
+}
+
 // Refund moves a SUCCESS payment to REFUNDED and returns it afterwards.
 //
 // The status check and the change are one conditional UPDATE, so two

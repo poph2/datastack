@@ -29,6 +29,7 @@ type (
 	}
 	Payments interface {
 		Charge(ctx context.Context, orderID uint64, amount decimal.Decimal) error
+		Paid(ctx context.Context, orderID uint64) (bool, error)
 	}
 	Marketing interface {
 		RecordConversion(ctx context.Context, attributionID, orderID uint64, amount decimal.Decimal) error

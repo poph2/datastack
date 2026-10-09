@@ -75,5 +75,26 @@ resources:
     cpu: 25m
     memory: 64Mi
   limits:
-    cpu: 250m
+    cpu: 500m
     memory: 192Mi
+
+# Lenient probes, as in the go-service chart. The chart's defaults (1s
+# timeout, 10s period) restart the collector whenever image builds or StarRocks
+# starve the kind node of CPU, and a CPU-throttled contrib collector can take
+# over 30s to start. The startup probe allows up to 3 minutes for that.
+startupProbe:
+  httpGet:
+    port: 13133
+  periodSeconds: 5
+  failureThreshold: 36
+livenessProbe:
+  httpGet:
+    port: 13133
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+readinessProbe:
+  httpGet:
+    port: 13133
+  periodSeconds: 5
+  timeoutSeconds: 3

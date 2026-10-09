@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/httpclient"
@@ -30,6 +31,7 @@ const (
 	flagShipmentTimeout   = "shipment-timeout"
 	flagReconcileInterval = "reconcile-interval"
 	flagReconcileAfter    = "reconcile-after"
+	flagPendingAfter      = "pending-after"
 
 	tracingFlushTimeout = 5 * time.Second
 )
@@ -56,6 +58,8 @@ func newServeCommand(v *viper.Viper) *cobra.Command {
 	flags.Duration(flagShipmentTimeout, time.Second, "timeout for the shipment request")
 	flags.Duration(flagReconcileInterval, 30*time.Second, "how often to retry shipments for orders stuck in PAID (0 disables)")
 	flags.Duration(flagReconcileAfter, 30*time.Second, "how long an order must be PAID before the reconciler retries it")
+	flags.Duration(flagPendingAfter, 2*time.Minute,
+		"how long an order must sit untouched in PENDING before the reconciler resolves it (must exceed any checkout)")
 	return cmd
 }
 
@@ -93,10 +97,16 @@ func serve(ctx context.Context, v *viper.Viper) error {
 	repo := order.NewRepository(db)
 	checkout := order.NewCheckout(repo, peers, logger)
 
-	reconciler, err := order.NewReconciler(repo, checkout, peers.Customers, order.ReconcileConfig{
-		Interval: v.GetDuration(flagReconcileInterval),
-		After:    v.GetDuration(flagReconcileAfter),
+	reconciler, err := order.NewReconciler(repo, checkout, peers, order.ReconcileConfig{
+		Interval:     v.GetDuration(flagReconcileInterval),
+		After:        v.GetDuration(flagReconcileAfter),
+		PendingAfter: v.GetDuration(flagPendingAfter),
 	}, logger)
+	if err != nil {
+		return err
+	}
+
+	chaosKnobs, err := chaos.NewStore(serviceName, logger)
 	if err != nil {
 		return err
 	}
@@ -106,7 +116,7 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		ServiceName:    serviceName,
 		Logger:         logger,
 		Ready:          func(ctx context.Context) error { return database.Ping(ctx, db) },
-		RegisterRoutes: handler.RegisterRoutes,
+		RegisterRoutes: chaosKnobs.Routes(handler.RegisterRoutes),
 	})
 
 	// The HTTP server and the reconciler share one lifetime (see the

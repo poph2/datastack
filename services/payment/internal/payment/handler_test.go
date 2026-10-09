@@ -51,6 +51,17 @@ func (s *fakeStore) Get(_ context.Context, id uint64) (Payment, error) {
 	return p, nil
 }
 
+func (s *fakeStore) ListByOrder(_ context.Context, orderID uint64, status Status) ([]Payment, error) {
+	var payments []Payment
+	for id := uint64(1); id < s.nextID; id++ {
+		p, ok := s.payments[id]
+		if ok && p.OrderID == orderID && (status == "" || p.Status == status) {
+			payments = append(payments, p)
+		}
+	}
+	return payments, nil
+}
+
 func (s *fakeStore) Refund(_ context.Context, id uint64) (Payment, error) {
 	p, ok := s.payments[id]
 	if !ok {
@@ -306,4 +317,43 @@ func TestProbes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, doRequest(router, http.MethodGet, "/healthz", "").Code)
 	assert.Equal(t, http.StatusOK, doRequest(router, http.MethodGet, "/readyz", "").Code)
+}
+
+func TestListPaymentsByOrder(t *testing.T) {
+	store := newFakeStore()
+	router := newTestRouter(t, store, newTestGateway(t, false))
+	for _, p := range []Payment{
+		{OrderID: 9, Amount: decimal.RequireFromString("5"), Method: MethodPayPal, Status: StatusDeclined},
+		{OrderID: 9, Amount: decimal.RequireFromString("5"), Method: MethodPayPal, Status: StatusSuccess},
+		{OrderID: 10, Amount: decimal.RequireFromString("5"), Method: MethodPayPal, Status: StatusSuccess},
+	} {
+		require.NoError(t, store.Create(context.Background(), &p))
+	}
+
+	rec := doRequest(router, http.MethodGet, "/payments?order_id=9", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	all := decode[listResponse](t, rec).Payments
+	require.Len(t, all, 2)
+	assert.Equal(t, StatusDeclined, all[0].Status)
+	assert.Equal(t, "5.00", all[0].Amount)
+
+	rec = doRequest(router, http.MethodGet, "/payments?order_id=9&status=SUCCESS", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	success := decode[listResponse](t, rec).Payments
+	require.Len(t, success, 1)
+	assert.Equal(t, uint64(2), success[0].PaymentID)
+
+	rec = doRequest(router, http.MethodGet, "/payments?order_id=77", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"payments":[]}`, rec.Body.String(), "no payments is an empty list, not 404")
+}
+
+func TestListPaymentsRejectsInvalidQuery(t *testing.T) {
+	router := newTestRouter(t, newFakeStore(), newTestGateway(t, false))
+
+	for _, path := range []string{"/payments", "/payments?order_id=0", "/payments?order_id=x", "/payments?order_id=1&status=LOST"} {
+		rec := doRequest(router, http.MethodGet, path, "")
+		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+		assert.Equal(t, httpserver.CodeInvalidRequest, decode[httpserver.ErrorResponse](t, rec).Error)
+	}
 }

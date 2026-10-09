@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/httpserver"
@@ -66,12 +67,17 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		}
 	}()
 
+	chaosKnobs, err := chaos.NewStore(serviceName, logger)
+	if err != nil {
+		return err
+	}
+
 	handler := customer.NewHandler(customer.NewRepository(db), tiers)
 	router := httpserver.NewRouter(httpserver.RouterConfig{
 		ServiceName:    serviceName,
 		Logger:         logger,
 		Ready:          func(ctx context.Context) error { return database.Ping(ctx, db) },
-		RegisterRoutes: handler.RegisterRoutes,
+		RegisterRoutes: chaosKnobs.Routes(handler.RegisterRoutes),
 	})
 
 	return httpserver.Run(ctx, v.GetString(flagHTTPAddr), router, logger)

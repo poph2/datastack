@@ -92,6 +92,9 @@ func (c *InventoryClient) Release(ctx context.Context, productID string, quantit
 	return c.client.Do(ctx, http.MethodPost, "/inventory/release", stockChange{productID, quantity}, nil)
 }
 
+// paymentStatusSuccess is the Payment Service status of a captured charge.
+const paymentStatusSuccess = "SUCCESS"
+
 // PaymentClient calls the Payment Service.
 type PaymentClient struct{ client *httpclient.Client }
 
@@ -119,6 +122,21 @@ func (c *PaymentClient) Charge(ctx context.Context, orderID uint64, amount decim
 		return nil
 	}
 	return err
+}
+
+// Paid reports whether the order has a successful payment. The reconciler
+// asks before deciding the fate of an order stranded in PENDING.
+func (c *PaymentClient) Paid(ctx context.Context, orderID uint64) (bool, error) {
+	var list struct {
+		Payments []struct {
+			Status string `json:"status"`
+		} `json:"payments"`
+	}
+	path := fmt.Sprintf("/payments?order_id=%d&status=%s", orderID, paymentStatusSuccess)
+	if err := c.client.Do(ctx, http.MethodGet, path, nil, &list); err != nil {
+		return false, err
+	}
+	return len(list.Payments) > 0, nil
 }
 
 // MarketingClient calls the Marketing Service.

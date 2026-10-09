@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/poph2/datastack/pkgs/chaos"
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/httpserver"
@@ -37,7 +38,7 @@ func newServeCommand(v *viper.Viper) *cobra.Command {
 	}
 
 	cmd.Flags().String(flagHTTPAddr, ":8084", "address the HTTP API listens on")
-	cmd.Flags().Float64(flagFailureRate, 0.05, "share of charges declined, between 0 and 1")
+	cmd.Flags().Float64(flagFailureRate, 0.05, "share of charges declined, between 0 and 1 (default of the decline_rate chaos knob)")
 	cmd.Flags().Duration(flagLatencyMin, 20*time.Millisecond, "minimum simulated gateway latency")
 	cmd.Flags().Duration(flagLatencyMax, 150*time.Millisecond, "maximum simulated gateway latency (0 disables)")
 	cmd.Flags().String(flagMethodWeights, "CREDIT_CARD=75,PAYPAL=25",
@@ -65,6 +66,11 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		return err
 	}
 
+	chaosKnobs, err := chaos.NewStore(serviceName, logger, gateway.ChaosKnobs()...)
+	if err != nil {
+		return err
+	}
+
 	shutdownTracing, err := telemetry.SetupTracing(ctx, serviceName)
 	if err != nil {
 		return err
@@ -86,7 +92,7 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		ServiceName:    serviceName,
 		Logger:         logger,
 		Ready:          func(ctx context.Context) error { return database.Ping(ctx, db) },
-		RegisterRoutes: handler.RegisterRoutes,
+		RegisterRoutes: chaosKnobs.Routes(handler.RegisterRoutes),
 	})
 
 	return httpserver.Run(ctx, v.GetString(flagHTTPAddr), router, logger)
