@@ -3,11 +3,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/poph2/datastack/services/backend/internal/agent"
 	"github.com/poph2/datastack/services/backend/internal/control"
 	"github.com/poph2/datastack/services/backend/internal/ingestion"
+	"github.com/poph2/datastack/services/backend/internal/orchestrator"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -19,10 +21,10 @@ func NewRouter(ingestionSvc *ingestion.Service, agentSvc *agent.Service, control
 	mux.HandleFunc("GET /api/ingestion/status", handleIngestionStatus(ingestionSvc))
 	mux.HandleFunc("POST /api/agent/ask", handleAgentAsk(agentSvc))
 	mux.HandleFunc("GET /api/control/status", handleControlStatus(controlSvc))
-	mux.HandleFunc("POST /api/control/orchestrator/start", handleControlSet(controlSvc.SetOrchestratorRunning, true))
-	mux.HandleFunc("POST /api/control/orchestrator/stop", handleControlSet(controlSvc.SetOrchestratorRunning, false))
-	mux.HandleFunc("POST /api/control/ingestion/start", handleControlSet(controlSvc.SetIngestionRunning, true))
-	mux.HandleFunc("POST /api/control/ingestion/stop", handleControlSet(controlSvc.SetIngestionRunning, false))
+	mux.HandleFunc("POST /api/control/orchestrator/start", handleControlAction(controlSvc.StartOrchestrator))
+	mux.HandleFunc("POST /api/control/orchestrator/stop", handleControlAction(controlSvc.StopOrchestrator))
+	mux.HandleFunc("POST /api/control/ingestion/start", handleControlAction(controlSvc.StartIngestion))
+	mux.HandleFunc("POST /api/control/ingestion/stop", handleControlAction(controlSvc.StopIngestion))
 	mux.Handle("GET /metrics", promhttp.Handler())
 
 	return withCORS(mux)
@@ -58,9 +60,17 @@ func handleControlStatus(svc *control.Service) http.HandlerFunc {
 	}
 }
 
-func handleControlSet(set func(bool) control.Status, running bool) http.HandlerFunc {
+func handleControlAction(action func() (control.Status, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, set(running))
+		status, err := action()
+		switch {
+		case errors.Is(err, orchestrator.ErrCaughtUp):
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "status": status})
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		default:
+			writeJSON(w, http.StatusOK, status)
+		}
 	}
 }
 
