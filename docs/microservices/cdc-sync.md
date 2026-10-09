@@ -9,7 +9,7 @@
 
 ## Purpose
 
-The CDC Sync App is the bridge from the operational layer to the analytical layer. It copies every insert and update from the microservice databases into StarRocks within seconds, so the Grafana dashboards are effectively real-time. It uses timestamp-watermark polling, not log-based CDC. That approach is simple and easy to explain, and it works because every table follows the universal-column convention (`updated_at` maintained by a trigger, soft deletes only).
+The CDC Sync App is the bridge from the operational layer to the analytical layer. It copies every insert and update from the microservice databases into StarRocks within seconds, so the Grafana dashboards are effectively real-time. It uses timestamp-watermark polling, not log-based CDC. That approach is simple and easy to explain, and it works because every table follows the universal-column convention (`updated_at` maintained by Postgres, soft deletes via `deleted_at`).
 
 ## Tables
 
@@ -117,7 +117,7 @@ Create every StarRocks table with the **Primary Key** model, keyed on `id`. A ro
 
 ```sql
 CREATE TABLE analytics_db.orders (
-  id INT NOT NULL,
+  id BIGINT NOT NULL,
   user_id INT,
   attribution_id INT,
   product_id VARCHAR(50),
@@ -126,14 +126,14 @@ CREATE TABLE analytics_db.orders (
   total_amount DECIMAL(10,2),
   status VARCHAR(20),
   failure_reason VARCHAR(50),
-  is_deleted BOOLEAN,
   created_at DATETIME,
-  updated_at DATETIME
+  updated_at DATETIME,
+  deleted_at DATETIME
 ) PRIMARY KEY (id)
 DISTRIBUTED BY HASH (id);
 ```
 
-Dashboards filter `WHERE is_deleted = FALSE`.
+Dashboards filter `WHERE deleted_at IS NULL`.
 
 ### 4. Intermediate states can collapse
 
@@ -155,11 +155,12 @@ Give each load a deterministic `label` derived from the table and batch cursor (
 
 | Postgres | JSON encoding | StarRocks |
 |---|---|---|
-| `SERIAL` / `INT` | number | `INT` |
+| `BIGSERIAL` / `BIGINT` | number | `BIGINT` |
+| `INT` | number | `INT` |
 | `VARCHAR(n)` | string | `VARCHAR(n)` |
 | `DECIMAL(10,2)` | string (avoid float rounding) | `DECIMAL(10,2)` |
 | `BOOLEAN` | `true`/`false` | `BOOLEAN` |
-| `TIMESTAMP` | `"YYYY-MM-DD HH:MM:SS.ffffff"` | `DATETIME` |
+| `TIMESTAMPTZ` | `"YYYY-MM-DD HH:MM:SS.ffffff"`, converted to UTC | `DATETIME` (UTC) |
 
 ## Configuration
 

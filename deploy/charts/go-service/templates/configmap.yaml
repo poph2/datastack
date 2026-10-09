@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "go-service.name" . }}
+  labels:
+    {{- include "go-service.labels" . | nindent 4 }}
+data:
+  HTTP_ADDR: ":{{ .Values.port }}"
+  {{- range $key, $value := .Values.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

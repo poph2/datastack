@@ -1,0 +1,52 @@
+# Defaults for every DataStack Go service. Per-service overrides live in
+# deploy/values/<service>.yaml. The release name becomes the Kubernetes
+# Service name (for example customer-service), which other services use in
+# their *_URL settings.
+
+image:
+  repository: ""
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Port the HTTP API listens on. Passed to the binary as HTTP_ADDR.
+port: 8080
+
+# Plain, non-secret settings, rendered into a ConfigMap and loaded as
+# environment variables. Keys are the binary's flag names in env form (for
+# example TIER_WEIGHTS for --tier-weights).
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+
+postgres:
+  # CloudNativePG Cluster this service's database lives in.
+  cluster: datastack-pg
+  # Logical database owned by this service. The chart creates it with a CNPG
+  # Database resource, and the service creates its tables itself through
+  # `migrate up`.
+  database: ""
+  owner: app
+  # Secret CNPG generates for the owner role (keys: username, password).
+  credentialsSecret: datastack-pg-app
+  sslmode: require
+
+migrations:
+  # Run `<binary> migrate up` as an initContainer before `serve` starts.
+  enabled: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Gives the service time to drain. Must exceed preStopSleepSeconds plus the
+# binary's 15s shutdown timeout.
+terminationGracePeriodSeconds: 30
+# Keeps the pod serving briefly after it is marked for termination, while the
+# Service endpoints update, so in-flight callers aren't sent to a closed port.
+preStopSleepSeconds: 5

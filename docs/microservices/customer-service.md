@@ -1,9 +1,12 @@
 # Customer Service: Identity and Segmentation
 
+> **Status: built.** Code is in [`services/customer`](../../services/customer). This is the reference implementation for the shared conventions in the [ecosystem README](README.md#3-shared-conventions).
+
 | | |
 |---|---|
 | Port | `8081` |
 | Kubernetes service | `customer-service` |
+| Binary | `customer` (`serve`, `migrate up\|down\|status`) |
 | Database | `customers` |
 | Tables | `customers` |
 | Called by | k6, Order Service |
@@ -21,59 +24,55 @@ The Customer Service is the source of truth for **who** is interacting with the 
 
 ## Data Model
 
-Schema as specified:
+Implemented in [`migrations/00002_create_customers.sql`](../../services/customer/migrations/00002_create_customers.sql):
 
 ```sql
 CREATE TABLE customers (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE,
-    country VARCHAR(50),
-    loyalty_tier VARCHAR(20), -- BRONZE, SILVER, GOLD
-    is_deleted BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    id           BIGSERIAL    PRIMARY KEY,
+    email        VARCHAR(255) NOT NULL,
+    country      VARCHAR(2)   NOT NULL, -- ISO 3166-1 alpha-2
+    loyalty_tier VARCHAR(20)  NOT NULL CHECK (loyalty_tier IN ('BRONZE', 'SILVER', 'GOLD')),
+    status       VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
+                              CHECK (status IN ('ACTIVE', 'SUSPENDED', 'PENDING_DELETION')),
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    deleted_at   TIMESTAMPTZ
 );
 
-CREATE TRIGGER customers_set_updated_at
-  BEFORE UPDATE ON customers
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE UNIQUE INDEX customers_email_live_uq ON customers (email) WHERE deleted_at IS NULL;
+CREATE INDEX customers_updated_at_id_idx ON customers (updated_at, id);
+CREATE TRIGGER customers_set_updated_at BEFORE UPDATE ON customers
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
-### Proposed addition: account state
+Changes from the original spec:
 
-The account-state responsibility needs a column the base schema doesn't have:
-
-```sql
-ALTER TABLE customers
-  ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'; -- ACTIVE, SUSPENDED, PENDING_DELETION
-```
-
-- `is_deleted` remains the CDC soft-delete flag (the row is logically gone).
-- `status = 'PENDING_DELETION'` is a business state: the user asked to delete their account, but the row still exists and is visible to analytics.
+- **`status` added** to support the account-state responsibility.
+- **`deleted_at` replaces `is_deleted`.** `deleted_at` is GORM's soft-delete column, and it means the row is logically gone. `status = 'PENDING_DELETION'` is different: it's a business state where the user has asked for deletion but the row is still live and visible to analytics.
+- **Email uniqueness covers live rows only**, so a deleted customer's email can register again.
+- Emails are stored lower-cased. `country` must be an upper-case ISO 3166-1 alpha-2 code.
 
 ## API
+
+All errors use the shared body `{"error": "<CODE>", "message": "..."}`.
 
 ### `POST /customers`
 
 Registers a new user. k6 calls this to simulate sign-up.
 
-Request:
-
 ```json
 { "email": "ada@example.com", "country": "US", "loyalty_tier": "BRONZE" }
 ```
 
-- `email` is required and must be unique. k6 should generate unique emails (for example with the VU ID plus the iteration number).
-- `country` is required (ISO-3166 alpha-2 recommended).
-- `loyalty_tier` is optional. If it's omitted, the service assigns one with a weighted random draw (for example 70% `BRONZE`, 22% `SILVER`, 8% `GOLD`) so segments have realistic proportions.
-
-Responses:
+- `email` is required, must be a valid email, and must be unique among live customers. k6 should generate unique emails (for example with the VU ID plus the iteration number).
+- `country` is required (ISO 3166-1 alpha-2, upper case).
+- `loyalty_tier` is optional. If it's omitted, the service assigns one at random using `TIER_WEIGHTS` (default 70% `BRONZE`, 22% `SILVER`, 8% `GOLD`).
 
 | Status | Body |
 |---|---|
-| `201 Created` | `{"id": 1234, "email": "...", "country": "US", "loyalty_tier": "BRONZE", "status": "ACTIVE", "created_at": "..."}` |
-| `400 Bad Request` | `{"error": "INVALID_REQUEST", ...}` |
-| `409 Conflict` | `{"error": "EMAIL_EXISTS", ...}` |
+| `201 Created` | `{"id": 1234, "email": "...", "country": "US", "loyalty_tier": "BRONZE", "status": "ACTIVE", "created_at": "...", "updated_at": "..."}` |
+| `400 Bad Request` | `INVALID_REQUEST` |
+| `409 Conflict` | `EMAIL_EXISTS` |
 
 ### `GET /customers/{id}`
 
@@ -81,47 +80,91 @@ Returns one user. k6 calls it to "fetch" an existing user before starting a sess
 
 | Status | Body |
 |---|---|
-| `200 OK` | `{"id": 1234, "email": "...", "country": "US", "loyalty_tier": "GOLD", "status": "ACTIVE"}` |
-| `404 Not Found` | `{"error": "CUSTOMER_NOT_FOUND", ...}`, also returned when `is_deleted = TRUE` |
+| `200 OK` | the customer, same shape as the create response |
+| `400 Bad Request` | `INVALID_REQUEST`: the ID isn't a positive integer |
+| `404 Not Found` | `CUSTOMER_NOT_FOUND`, also returned for soft-deleted customers |
 
 The service reports `status` as-is and doesn't decide whether a checkout is allowed. The Order Service treats anything other than `ACTIVE` as a rejection.
 
-### Optional: lifecycle simulation
+### `PATCH /customers/{id}`
 
-To make loyalty and account-state analytics move over time, the service can expose admin endpoints for k6 (or run a background job):
+Lifecycle simulation: tier upgrades, suspensions, and deletion requests. k6 can call it so segment and account-state analytics change over time.
 
-- `PATCH /customers/{id}`: change `loyalty_tier` or `status` (upgrades, suspensions).
-- `DELETE /customers/{id}`: sets `is_deleted = TRUE` (soft delete only).
+```json
+{ "loyalty_tier": "GOLD", "status": "SUSPENDED" }
+```
+
+Both fields are optional, but at least one is required.
+
+| Status | Body |
+|---|---|
+| `200 OK` | the updated customer |
+| `400 Bad Request` | `INVALID_REQUEST` |
+| `404 Not Found` | `CUSTOMER_NOT_FOUND` |
+
+### `DELETE /customers/{id}`
+
+Soft-deletes the customer by setting `deleted_at`. The trigger moves `updated_at`, so the CDC sync carries the delete to StarRocks.
+
+| Status | Body |
+|---|---|
+| `204 No Content` | |
+| `404 Not Found` | `CUSTOMER_NOT_FOUND` |
+
+### Operational endpoints
+
+`GET /healthz`, `GET /readyz` (pings Postgres), `GET /metrics` (Prometheus).
 
 ## Interactions
 
 ```mermaid
 flowchart LR
   k6 -->|POST /customers| CS[Customer Service]
-  k6 -->|GET /customers/id| CS
+  k6 -->|GET, PATCH /customers/id| CS
   OS[Order Service] -->|GET /customers/id| CS
   CS --> DB[(customers DB)]
 ```
 
-- **Upstream, k6:** registration and session-start lookups.
+- **Upstream, k6:** registration, session-start lookups, and lifecycle changes.
 - **Upstream, Order Service:** a synchronous validation call in the checkout critical path. The Order Service uses the result to accept or reject the checkout, and it reads `country` to use as the shipment destination.
 
-Because this call sits in the checkout critical path, `GET /customers/{id}` must be a single primary-key lookup with no joins.
+Because this call sits in the checkout critical path, `GET /customers/{id}` is a single primary-key lookup with no joins.
 
 ## Configuration
 
-| Variable | Example |
-|---|---|
-| `PORT` | `8081` |
-| `DATABASE_URL` | `postgres://demo:demo@postgresql:5432/customers?sslmode=disable&timezone=UTC` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` |
-| `OTEL_SERVICE_NAME` | `customer-service` |
-| `TIER_WEIGHTS` | `BRONZE=70,SILVER=22,GOLD=8` |
+Every flag can also be set as an environment variable (`--tier-weights` ↔ `TIER_WEIGHTS`).
+
+| Flag / env var | Default | Notes |
+|---|---|---|
+| `--http-addr` / `HTTP_ADDR` | `:8081` | Set by the chart from `port` |
+| `--database-url` / `DATABASE_URL` | none | In kind: `postgres://datastack-pg-rw:5432/customers?sslmode=require`, with `PGUSER`/`PGPASSWORD` from the CNPG secret |
+| `--tier-weights` / `TIER_WEIGHTS` | `BRONZE=70,SILVER=22,GOLD=8` | Relative weights. They needn't sum to 100 |
+| `--log-level` / `LOG_LEVEL` | `info` | |
+| `--log-format` / `LOG_FORMAT` | `json` | `text` for local dev |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | For example `http://otel-collector:4317`. Unset means spans aren't exported |
+
+## Running It
+
+```sh
+# Local: Postgres in docker compose, service via go run
+make up
+make run-customer                 # migrate up, then serve on :8081
+
+# kind
+make kind-up infra                # once
+make deploy-customer              # build, load, helm upgrade --install customer-service
+make forward-customer             # localhost:8081
+
+curl -XPOST localhost:8081/customers -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","country":"GB"}'
+```
 
 ## Telemetry
 
-- Inbound spans via `otelhttp.NewHandler`. During checkout, `GET /customers/{id}` appears as a child of the Order Service span.
-- Useful span attributes: `customer.id`, `customer.loyalty_tier`, `customer.status`.
+- Inbound spans come from `otelgin`. During checkout, `GET /customers/{id}` appears as a child of the Order Service span.
+- Span attributes: `customer.id`, `customer.loyalty_tier`, `customer.status`.
+- GORM query spans (no query parameters, so no PII in traces).
+- Request logs include `trace_id`/`span_id`. 4xx responses log at WARN and 5xx at ERROR.
 
 ## Analytics Impact
 

@@ -69,7 +69,7 @@ The decrement is a single statement. Postgres takes the row lock, and the `WHERE
 UPDATE inventory
    SET stock_level = stock_level - $2
  WHERE product_id = $1
-   AND is_deleted = FALSE
+   AND deleted_at IS NULL
    AND stock_level >= $2
 RETURNING stock_level, price, category;
 ```

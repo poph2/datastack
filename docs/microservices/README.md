@@ -4,7 +4,7 @@ This is the architecture of DataStack's e-commerce microservice ecosystem. It re
 
 The ecosystem has six Go HTTP microservices and a Go CDC sync daemon. It runs on a local Kubernetes (kind) cluster. k6 generates the traffic, OpenTelemetry emits distributed traces, and the sync daemon streams operational data into StarRocks for real-time Grafana dashboards.
 
-> **Status:** target design. The code currently in `services/backend` and `docker-compose.yml` still follows the previous design.
+> **Status:** being built one service at a time. Built so far: **Customer Service** ([`services/customer`](../../services/customer)), the reference implementation for the conventions in §3.
 
 ## Service Index
 
@@ -134,58 +134,105 @@ See [order-service.md](order-service.md) for the exact orchestration and failure
 
 ## 3. Shared Conventions
 
+These conventions were established while building the Customer Service ([`services/customer`](../../services/customer)), which is the reference implementation. Every later service follows them.
+
 ### 3.1 Universal columns and triggers
 
-The CDC Sync App needs three columns on every operational table:
+Every operational table starts with the same four columns. In Go, they come from embedding `database.Model` ([`pkgs/database/model.go`](../../pkgs/database/model.go)):
 
 | Column | Definition | Purpose |
 |---|---|---|
-| `created_at` | `TIMESTAMP DEFAULT NOW()` | Row creation time; used for latency and cohort analytics |
-| `updated_at` | `TIMESTAMP DEFAULT NOW()` | CDC watermark; **must be refreshed on every UPDATE by a trigger** |
-| `is_deleted` | `BOOLEAN DEFAULT FALSE` | Soft delete. Hard deletes are invisible to watermark CDC, so services never `DELETE` rows. |
+| `id` | `BIGSERIAL PRIMARY KEY` | Auto-incrementing key; tie-breaker in the CDC cursor |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | Row creation time; used for latency and cohort analytics |
+| `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | CDC watermark; **refreshed on every UPDATE by a trigger** |
+| `deleted_at` | `TIMESTAMPTZ` (nullable) | GORM soft delete. Hard deletes are invisible to watermark CDC, so services never `DELETE` rows |
 
-Every database installs the same trigger function, and every table gets a `BEFORE UPDATE` trigger:
+Rules:
+
+- **Postgres is the only clock.** `created_at` and `updated_at` are never written by the application: the model tags them `<-:false;default:now()`, and GORM reads them back with `RETURNING`. If GORM set them from the pod's clock on insert while the trigger used the database's clock on update, clock skew could move `updated_at` backwards, and the sync daemon would skip rows. (An integration test caught exactly this.)
+- **Soft delete moves the watermark.** GORM's soft delete is an `UPDATE ... SET deleted_at`, so the trigger moves `updated_at` and the sync daemon sees the delete.
+- **Unique constraints are partial**, for example `UNIQUE (email) WHERE deleted_at IS NULL`, so a soft-deleted row doesn't block re-creating it.
+- **Every table has a `(updated_at, id)` index** for the sync daemon's cursor query.
+- **Enums are `VARCHAR` with a `CHECK` constraint**, mirrored as typed string constants in Go.
+- `TIMESTAMPTZ` everywhere, so the session time zone can't affect watermarks.
+
+The service docs that haven't been built yet still show the schemas from the original spec (`SERIAL`, `TIMESTAMP`, `is_deleted`). Each one moves to these conventions when its service is built.
+
+Each service's first migration installs the trigger function, and every table gets a `BEFORE UPDATE` trigger:
 
 ```sql
-CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+-- 00001_set_updated_at_function.sql
+CREATE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
+    NEW.updated_at = NOW();
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- one per table, for example:
-CREATE TRIGGER orders_set_updated_at
-  BEFORE UPDATE ON orders
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+-- in each table's migration:
+CREATE TRIGGER customers_set_updated_at
+    BEFORE UPDATE ON customers
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
-Run the Postgres instance and every service connection in **UTC**. The columns are `TIMESTAMP` without time zone, so a mixed session time zone would corrupt watermarks.
+### 3.2 Schema ownership and migrations
 
-### 3.2 Schema ownership
-
-Each service applies its own schema (tables, trigger function, triggers) at startup using embedded, idempotent SQL migrations. Nothing outside the service creates or alters its tables. The Postgres Helm chart only creates the six empty logical databases.
+- Each service owns one logical database. In kind, its Helm release declares that database as a CloudNativePG `Database` resource.
+- Tables are created only by the service's own versioned **goose** SQL migrations (`services/<name>/migrations/NNNNN_name.sql`), which are embedded in the binary. GORM `AutoMigrate` is not used.
+- `<binary> migrate up|down|status` runs them. In Kubernetes, `migrate up` runs as an **initContainer** before `serve` starts. A Postgres advisory lock makes concurrent replicas safe.
+- Every migration has a working `-- +goose Down`. The integration tests run up → down → up.
 
 ### 3.3 HTTP API conventions
 
-- REST over JSON, `Content-Type: application/json`.
-- Error body: `{"error": "<MACHINE_CODE>", "message": "<human text>"}`. Machine codes such as `OUT_OF_STOCK` and `PAYMENT_DECLINED` are what the Order Service records as `failure_reason`.
-- Every service exposes `GET /healthz` (liveness) and `GET /readyz` (readiness; checks the DB connection) for Kubernetes probes.
+- REST over JSON with **gin**. Requests are validated with gin binding tags (go-playground/validator), and invalid input gets `400 INVALID_REQUEST`.
+- Error body: `{"error": "<MACHINE_CODE>", "message": "<human text>"}` (`httpserver.RespondError`). Machine codes such as `OUT_OF_STOCK` and `PAYMENT_DECLINED` are what the Order Service records as `failure_reason`. 500s never leak internals.
+- Database models are never serialised directly. Handlers map them to response structs.
+- Every service exposes `GET /healthz` (liveness), `GET /readyz` (readiness; pings the DB) and `GET /metrics`. These sit outside the tracing and logging middleware, so probes don't create noise.
 - Service-to-service URLs come from environment variables populated by ConfigMaps (for example `PAYMENT_URL=http://payment-service:8084`).
 - Outbound HTTP clients use explicit timeouts. No call waits forever.
 
-### 3.4 Go service layout
+### 3.4 Configuration
 
-Each service is its own module in the repo's Go workspace (`go.work`) and its own container image. They all share the same skeleton:
+- **cobra** commands: `serve`, `migrate up|down|status`.
+- **viper** binds every flag to an environment variable of the same name: `--database-url` ↔ `DATABASE_URL`, `--tier-weights` ↔ `TIER_WEIGHTS`. Flag defaults are the documented defaults.
+- In Kubernetes, plain settings go in the chart's ConfigMap. Database credentials come from CNPG's secret as `PGUSER`/`PGPASSWORD`, which pgx reads natively, so passwords never appear in URLs.
+
+### 3.5 Go layout
+
+One Go module at the repo root (`github.com/poph2/datastack`) and one shared `Dockerfile` (`--build-arg SERVICE=<name>`, distroless, non-root).
 
 ```
-services/<name>-service/
-  main.go              # config, OTel init, DB pool, HTTP server, graceful shutdown
-  internal/http/       # handlers + router, wrapped by otelhttp
-  internal/store/      # SQL against the service's own DB (pgx)
-  migrations/*.sql     # embedded, applied at boot
-  Dockerfile
+pkgs/                       # shared by every service
+  cli/         root cobra command, flag <-> env binding
+  database/    GORM open (pool, tracing plugin), base Model
+  migrate/     goose runner + `migrate` command
+  httpserver/  gin router (otelgin, slog-gin, Prometheus, recovery, probes), error helpers, graceful shutdown
+  logging/     slog JSON/text setup
+  telemetry/   OTel tracer provider + W3C propagator
+  pgtest/      testcontainers Postgres for integration tests
+services/<name>/
+  main.go      root command: serve + migrate
+  serve.go     wiring: logger, tracing, DB, handler, router, run
+  migrations/  embedded goose SQL
+  internal/<domain>/
+    model.go       GORM model + enum types
+    repository.go  GORM queries; maps driver errors to domain errors (ErrNotFound, ...)
+    handler.go     gin handlers, request/response types, Store interface
+    *_test.go      handler tests (fake Store) + repository tests (real Postgres)
+deploy/
+  charts/go-service/   one generic chart for every service
+  values/<name>.yaml   per-service values
+  infra/               CNPG Postgres cluster
+  kind/                cluster config
 ```
+
+A service adds a service layer between handler and repository only when it has real business logic. The Order Service's orchestration will have one; the Customer Service doesn't need one.
+
+### 3.6 Testing
+
+- Handler tests go through the real shared router (`httpserver.NewRouter`) with a fake `Store`.
+- Repository tests run the real migrations against Postgres in testcontainers (`pkgs/pgtest`) and assert the schema behaviour: triggers, constraints, soft delete.
+- `make test` runs everything (needs Docker). `make test-unit` (`go test -short`) skips the containers.
 
 ## 4. Telemetry (OpenTelemetry)
 
@@ -195,11 +242,13 @@ The goal is one trace per checkout, spanning every service it touches. This depe
 |---|---|
 | SDK | `go.opentelemetry.io/otel`, `go.opentelemetry.io/otel/sdk/trace` |
 | Propagation | `otel.SetTextMapPropagator(propagation.TraceContext{})`. **This is required:** without it, nothing injects `traceparent` |
-| Inbound spans | Wrap the mux with `otelhttp.NewHandler(mux, "<service>")` |
+| Inbound spans | `otelgin.Middleware("<service>")` on the API route group (`pkgs/httpserver`) |
 | Outbound spans | HTTP clients use `otelhttp.NewTransport(http.DefaultTransport)`, and requests must be built with the inbound `ctx` (`http.NewRequestWithContext`) |
-| DB spans (optional) | `otelpgx` tracer on the pgx pool, so SQL time appears inside each service span |
-| Exporter | OTLP gRPC to `otel-collector:4317` (`OTEL_EXPORTER_OTLP_ENDPOINT`) |
+| DB spans | GORM OpenTelemetry plugin (`gorm.io/plugin/opentelemetry`), with query variables omitted |
+| Exporter | OTLP gRPC to `otel-collector:4317`, configured by the standard `OTEL_*` env vars. If `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, spans are created (trace IDs still appear in logs) but not exported |
 | Resource | `service.name=<name>-service`, `deployment.environment=kind` |
+
+Request logs (slog JSON via `slog-gin`) include `trace_id` and `span_id`, so a log line links straight to its trace. Each service also exposes Prometheus metrics at `/metrics`: `http_server_requests_total{route,method,status}` and `http_server_request_duration_seconds`, plus Go runtime metrics.
 
 The collector forwards to Tempo, and Grafana uses Tempo as a datasource. In Tempo's service graph the Order Service appears as the hub, with edges to all five other services.
 
@@ -235,13 +284,23 @@ Tables synced (seven tables across six databases):
 | Component | Delivery |
 |---|---|
 | Six microservices, CDC Sync App, k6 runner | Images built locally and loaded with `kind load docker-image` |
-| Service wiring | One Deployment + ClusterIP Service per microservice. A ConfigMap per service holds peer URLs (`CUSTOMER_URL`, `INVENTORY_URL`, `PAYMENT_URL`, `MARKETING_URL`, `SHIPMENT_URL`), `DATABASE_URL`, and `OTEL_EXPORTER_OTLP_ENDPOINT` |
-| PostgreSQL | `bitnami/postgresql`: one instance, with six logical databases created by `primary.initdb.scripts` |
+| Service wiring | The generic `deploy/charts/go-service` chart, installed once per service as release `<name>-service`: Deployment (migrate initContainer, probes, preStop drain, non-root/read-only), ClusterIP Service, ConfigMap (peer URLs such as `PAYMENT_URL`, plus `OTEL_EXPORTER_OTLP_ENDPOINT`), and a CNPG `Database` |
+| PostgreSQL | CloudNativePG operator (`cnpg/cloudnative-pg`) running one `Cluster` (`deploy/infra/postgres.yaml`). Each service's chart release declares its own logical database. Bitnami's chart was dropped because its free images were discontinued in 2025 |
 | Traces | `open-telemetry/opentelemetry-collector`, `grafana/tempo` |
 | Dashboards | `grafana/grafana`, with Tempo and StarRocks (MySQL protocol, FE port 9030) datasources provisioned |
 | Analytics | `starrocks/starrocks` (kube-starrocks), overridden to 1 FE + 1 BE with 2 GB memory limits |
 | CDC Sync App | One Deployment with a single replica (the watermark file must have a single writer), plus a small PVC for `watermarks.json` |
 | Load | k6 as a continuous Deployment (steady demo traffic) or a CronJob (bursts) |
+
+Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
+
+```sh
+make kind-up            # create the kind cluster
+make infra              # CNPG operator + Postgres cluster
+make deploy-customer    # build image, kind load, helm upgrade --install customer-service
+make forward-customer   # port-forward localhost:8081
+make up && make run-customer   # or: local Postgres via docker compose + go run
+```
 
 Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `otel-collector`, `starrocks-fe`.
 

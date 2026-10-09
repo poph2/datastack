@@ -1,0 +1,7 @@
+# Go service images only need go.mod, go.sum, pkgs/ and services/.
+*
+!go.mod
+!go.sum
+!pkgs/
+!services/
+**/*_test.go

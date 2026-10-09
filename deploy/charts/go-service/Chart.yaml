@@ -1,0 +1,6 @@
+apiVersion: v2
+name: go-service
+description: Generic chart for a DataStack Go microservice (one binary with serve and migrate commands, backed by its own CloudNativePG database).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

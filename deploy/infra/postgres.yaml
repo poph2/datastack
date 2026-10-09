@@ -1,0 +1,25 @@
+# One small Postgres instance shared by every service, each with its own
+# logical database. Services declare their databases through the go-service
+# chart (CNPG Database resources). This cluster only provides the server and
+# the "app" role that owns them.
+#
+# CNPG stores that role's credentials in the secret datastack-pg-app.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: datastack-pg
+spec:
+  instances: 1
+  storage:
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  bootstrap:
+    initdb:
+      database: app
+      owner: app

@@ -1,0 +1,14 @@
+# Customer Service. Deployed as release "customer-service", which is also its
+# in-cluster DNS name: http://customer-service:8081
+image:
+  repository: datastack/customer
+
+port: 8081
+
+postgres:
+  database: customers
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  TIER_WEIGHTS: "BRONZE=70,SILVER=22,GOLD=8"
