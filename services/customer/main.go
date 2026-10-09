@@ -12,7 +12,7 @@ import (
 
 	"github.com/poph2/datastack/pkgs/cli"
 	"github.com/poph2/datastack/pkgs/migrate"
-	"github.com/poph2/datastack/services/customer/migrations"
+	"github.com/poph2/datastack/services/customer/internal/customer"
 )
 
 // serviceName identifies this service in logs, traces and metrics.
@@ -37,7 +37,7 @@ func newRootCommand() *cobra.Command {
 	root, v := cli.NewRootCommand("customer", "Customer Service: identity, geography, loyalty tier and account state")
 	root.AddCommand(
 		newServeCommand(v),
-		migrate.NewCommand(serviceName, v, migrations.FS),
+		migrate.NewCommand(serviceName, v, customer.Migrate),
 	)
 	return root
 }

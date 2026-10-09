@@ -1,6 +1,6 @@
 {{- if .Values.postgres.database }}
 # The service declares the database it owns. CNPG creates it in the shared
-# cluster, and the service's own `migrate up` creates the tables inside it.
+# cluster, and the service's own `migrate` (GORM AutoMigrate) creates the tables inside it.
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:

@@ -1,12 +1,12 @@
 # Inventory Service: Stock Keeper
 
-> **Status: built.** Code is in [`services/inventory`](../../services/inventory). It follows the shared conventions in the [ecosystem README](README.md#3-shared-conventions) and introduced several of them: money handling, concurrency through SQL, background workers, seed migrations, and domain metrics.
+> **Status: built.** Code is in [`services/inventory`](../../services/inventory). It follows the shared conventions in the [ecosystem README](README.md#3-shared-conventions) and introduced several of them: money handling, concurrency through SQL, background workers, seed data, and domain metrics.
 
 | | |
 |---|---|
 | Port | `8083` |
 | Kubernetes service | `inventory-service` |
-| Binary | `inventory` (`serve`, `migrate up\|down\|status`) |
+| Binary | `inventory` (`serve`, `migrate`) |
 | Database | `inventory` |
 | Tables | `inventory` |
 | Called by | Order Service (k6 optionally, for restocks) |
@@ -25,25 +25,17 @@ The Inventory Service checks the storefront against physical reality. It is the 
 
 ## Data Model
 
-Implemented in [`migrations/00002_create_inventory.sql`](../../services/inventory/migrations/00002_create_inventory.sql):
+The schema is the GORM model in [`internal/inventory/model.go`](../../services/inventory/internal/inventory/model.go), and `inventory migrate` applies it with `AutoMigrate`:
 
-```sql
-CREATE TABLE inventory (
-    id           BIGSERIAL     PRIMARY KEY,
-    product_id   VARCHAR(50)   NOT NULL,
-    category     VARCHAR(50)   NOT NULL,
-    stock_level  INT           NOT NULL CHECK (stock_level >= 0),
-    price        DECIMAL(10,2) NOT NULL CHECK (price > 0),
-    auto_restock BOOLEAN       NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    deleted_at   TIMESTAMPTZ
-);
-
-CREATE UNIQUE INDEX inventory_product_id_live_uq ON inventory (product_id) WHERE deleted_at IS NULL;
-CREATE INDEX inventory_updated_at_id_idx ON inventory (updated_at, id);
-CREATE TRIGGER inventory_set_updated_at BEFORE UPDATE ON inventory
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+```go
+type Product struct {          // table "inventory"
+	database.Model // id BIGSERIAL, created_at/updated_at TIMESTAMPTZ (DB clock), deleted_at, (updated_at, id) index
+	ProductID   string          `gorm:"size:50;not null;uniqueIndex:,where:deleted_at IS NULL"`
+	Category    string          `gorm:"size:50;not null"`
+	StockLevel  int             `gorm:"not null;check:chk_inventory_stock_level,stock_level >= 0"`
+	Price       decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_inventory_price,price > 0"`
+	AutoRestock bool            `gorm:"not null"` // deliberately no default (GORM zero-value trap)
+}
 ```
 
 Changes from the original spec:
@@ -56,13 +48,13 @@ In Go the row is `inventory.Product`, and `price` is a `decimal.Decimal`.
 
 ### Seed catalog
 
-[`00003_seed_catalog.sql`](../../services/inventory/migrations/00003_seed_catalog.sql) is a goose migration, so the `migrate up` initContainer loads it. It's deterministic, so every environment has the same catalog:
+[`seed.go`](../../services/inventory/internal/inventory/seed.go) is called by `Migrate`, so the `migrate` initContainer loads it. It inserts only when the table has never held products (soft-deleted rows count), so redeploys never re-seed or reset stock. It's deterministic, so every environment has the same catalog:
 
 | | |
 |---|---|
 | Product IDs | `PROD_0001` … `PROD_0100`. k6 can use this range directly or call `GET /inventory` |
 | Categories | `ELECTRONICS`, `APPAREL`, `HOME`, `BEAUTY`, `SPORTS`, rotating |
-| Prices | A realistic band per category (ELECTRONICS $99.99–$891.99 … BEAUTY $9.99–$58.99), all ending in .99 |
+| Prices | A realistic band per category (ELECTRONICS $99.99–$891.99 … BEAUTY $9.99–$108.99), all ending in .99 |
 | Starting stock | 40–199 units |
 | Low stock | Every 20th SKU (`PROD_0020`, `0040`, …) starts with **3** units, so `OUT_OF_STOCK` failures appear within minutes |
 | Never restocked | Every 25th SKU (`PROD_0025`, `0050`, `0075`, `0100`) has `auto_restock = false`. `PROD_0100` is both: it sells out fast and stays out |

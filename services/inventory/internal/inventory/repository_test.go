@@ -14,18 +14,17 @@ import (
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/migrate"
 	"github.com/poph2/datastack/pkgs/pgtest"
-	"github.com/poph2/datastack/services/inventory/migrations"
 )
 
-// newTestRepository starts Postgres, applies the real migrations (including
-// the seed catalog), and returns a repository plus the raw DB for setup and
+// newTestRepository starts Postgres, runs the real migrate command (schema
+// plus seed catalog), and returns a repository plus the raw DB for setup and
 // assertions.
 func newTestRepository(t *testing.T) (*Repository, *gorm.DB) {
 	t.Helper()
 	ctx := context.Background()
 	url := pgtest.Start(t)
 
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, discardLogger))
+	require.NoError(t, migrate.Run(ctx, url, discardLogger, Migrate))
 
 	db, err := database.Open(ctx, url)
 	require.NoError(t, err)
@@ -180,13 +179,28 @@ func TestRestockBelow(t *testing.T) {
 	assert.Zero(t, restocked)
 }
 
-func TestMigrationsRollBackCleanly(t *testing.T) {
+func TestMigrateIsIdempotent(t *testing.T) {
+	repo, db := newTestRepository(t)
 	ctx := context.Background()
-	url := pgtest.Start(t)
+	_, err := repo.Reserve(ctx, "PROD_0001", 5)
+	require.NoError(t, err)
 
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, discardLogger))
-	for range 3 {
-		require.NoError(t, migrate.Down(ctx, url, migrations.FS, discardLogger))
-	}
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, discardLogger))
+	// A second run, as on every redeploy, must neither fail nor re-seed or
+	// reset the catalog.
+	require.NoError(t, Migrate(ctx, db))
+
+	products, err := repo.List(ctx)
+	require.NoError(t, err)
+	assert.Len(t, products, catalogSize)
+	assert.Equal(t, catalogProduct(1).StockLevel-5, products[0].StockLevel)
+}
+
+func TestSeededScarceProductsKeepAutoRestockFalse(t *testing.T) {
+	// Guards the GORM zero-value trap: with a column default of true, GORM
+	// would skip the false on insert and every product would auto-restock.
+	repo, _ := newTestRepository(t)
+
+	p, err := repo.Get(context.Background(), "PROD_0025")
+	require.NoError(t, err)
+	assert.False(t, p.AutoRestock)
 }

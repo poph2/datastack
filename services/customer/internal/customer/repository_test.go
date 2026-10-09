@@ -14,18 +14,18 @@ import (
 	"github.com/poph2/datastack/pkgs/database"
 	"github.com/poph2/datastack/pkgs/migrate"
 	"github.com/poph2/datastack/pkgs/pgtest"
-	"github.com/poph2/datastack/services/customer/migrations"
 )
 
-// newTestRepository starts Postgres, applies the real migrations, and returns
-// a repository plus the raw DB for assertions the repository doesn't expose.
+// newTestRepository starts Postgres, runs the real migrate command, and
+// returns a repository plus the raw DB for assertions the repository doesn't
+// expose.
 func newTestRepository(t *testing.T) (*Repository, *gorm.DB) {
 	t.Helper()
 	ctx := context.Background()
 	url := pgtest.Start(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, logger))
+	require.NoError(t, migrate.Run(ctx, url, logger, Migrate))
 
 	db, err := database.Open(ctx, url)
 	require.NoError(t, err)
@@ -121,13 +121,9 @@ func TestRepository(t *testing.T) {
 	})
 }
 
-func TestMigrationsRollBackCleanly(t *testing.T) {
-	ctx := context.Background()
-	url := pgtest.Start(t)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+func TestMigrateIsIdempotent(t *testing.T) {
+	_, db := newTestRepository(t)
 
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, logger))
-	require.NoError(t, migrate.Down(ctx, url, migrations.FS, logger))
-	require.NoError(t, migrate.Down(ctx, url, migrations.FS, logger))
-	require.NoError(t, migrate.Up(ctx, url, migrations.FS, logger))
+	// A second run, as on every redeploy, must change nothing and not fail.
+	require.NoError(t, Migrate(context.Background(), db))
 }

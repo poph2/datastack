@@ -36,7 +36,7 @@ spec:
         - name: migrate
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["migrate", "up"]
+          args: ["migrate"]
           envFrom:
             - configMapRef:
                 name: {{ include "go-service.name" . }}

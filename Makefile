@@ -31,7 +31,7 @@ reset:
 # Runs a service against local Postgres, e.g. `make run-customer`.
 run-%:
 	DATABASE_URL=$(LOCAL_DATABASE_HOST)/$(call database_for,$*)?sslmode=disable LOG_FORMAT=text \
-		go run ./services/$* migrate up
+		go run ./services/$* migrate
 	DATABASE_URL=$(LOCAL_DATABASE_HOST)/$(call database_for,$*)?sslmode=disable LOG_FORMAT=text \
 		go run ./services/$* serve
 

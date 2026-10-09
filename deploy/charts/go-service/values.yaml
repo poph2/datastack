@@ -25,7 +25,7 @@ postgres:
   cluster: datastack-pg
   # Logical database owned by this service. The chart creates it with a CNPG
   # Database resource, and the service creates its tables itself through
-  # `migrate up`.
+  # `migrate` (GORM AutoMigrate).
   database: ""
   owner: app
   # Secret CNPG generates for the owner role (keys: username, password).
@@ -33,7 +33,7 @@ postgres:
   sslmode: require
 
 migrations:
-  # Run `<binary> migrate up` as an initContainer before `serve` starts.
+  # Run `<binary> migrate` (GORM AutoMigrate + seed data) as an initContainer before `serve` starts.
   enabled: true
 
 resources:

@@ -149,38 +149,39 @@ Every operational table starts with the same four columns. In Go, they come from
 
 Rules:
 
-- **Postgres is the only clock.** `created_at` and `updated_at` are never written by the application: the model tags them `<-:false;default:now()`, and GORM reads them back with `RETURNING`. If GORM set them from the pod's clock on insert while the trigger used the database's clock on update, clock skew could move `updated_at` backwards, and the sync daemon would skip rows. (An integration test caught exactly this.)
+- **Postgres is the only clock.** `created_at` and `updated_at` are never written by the application: the model tags them `<-:false;default:now()`, and GORM reads them back with `RETURNING`. (GORM would otherwise set them itself, but from the pod's clock. If inserts used the pod's clock while the trigger used the database's, clock skew could move `updated_at` backwards and the sync daemon would skip rows. An integration test caught exactly this. The trigger also covers writes that bypass GORM, such as `db.Exec` or a manual psql edit.)
 - **Soft delete moves the watermark.** GORM's soft delete is an `UPDATE ... SET deleted_at`, so the trigger moves `updated_at` and the sync daemon sees the delete.
 - **Unique constraints are partial**, for example `UNIQUE (email) WHERE deleted_at IS NULL`, so a soft-deleted row doesn't block re-creating it.
-- **Every table has a `(updated_at, id)` index** for the sync daemon's cursor query.
-- **Enums are `VARCHAR` with a `CHECK` constraint**, mirrored as typed string constants in Go.
+- **Every table has a `(updated_at, id)` index** (`idx_<table>_cdc_cursor`, declared on `database.Model`) for the sync daemon's cursor query.
+- **Enums are `VARCHAR` with a named `CHECK` constraint** (`check:chk_<table>_<column>,<expr>`), mirrored as typed string constants in Go. Name CHECKs explicitly: an unnamed expression that contains a comma is mis-parsed by GORM.
+- **No `default:` on bool or numeric columns whose zero value is meaningful.** GORM omits zero-valued fields that have a default on insert, so `default:true` would silently turn `false` into `true`.
 - `TIMESTAMPTZ` everywhere, so the session time zone can't affect watermarks.
 
 The service docs that haven't been built yet still show the schemas from the original spec (`SERIAL`, `TIMESTAMP`, `is_deleted`). Each one moves to these conventions when its service is built.
 
-Each service's first migration installs the trigger function, and every table gets a `BEFORE UPDATE` trigger:
+`database.AutoMigrate` installs the trigger after GORM's `AutoMigrate`, because GORM can't create triggers. It's idempotent (`CREATE OR REPLACE`):
 
 ```sql
--- 00001_set_updated_at_function.sql
-CREATE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- in each table's migration:
-CREATE TRIGGER customers_set_updated_at
-    BEFORE UPDATE ON customers
+-- for every migrated model:
+CREATE OR REPLACE TRIGGER "<table>_set_updated_at"
+    BEFORE UPDATE ON "<table>"
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
 ### 3.2 Schema ownership and migrations
 
 - Each service owns one logical database. In kind, its Helm release declares that database as a CloudNativePG `Database` resource.
-- Tables are created only by the service's own versioned **goose** SQL migrations (`services/<name>/migrations/NNNNN_name.sql`), which are embedded in the binary. GORM `AutoMigrate` is not used.
-- `<binary> migrate up|down|status` runs them. In Kubernetes, `migrate up` runs as an **initContainer** before `serve` starts. A Postgres advisory lock makes concurrent replicas safe.
-- Every migration has a working `-- +goose Down`. The integration tests run up → down → up.
+- **The GORM model is the schema.** Columns, sizes, `NOT NULL`, named CHECKs, partial unique indexes (`uniqueIndex:,where:deleted_at IS NULL`) and composite indexes are all declared in struct tags. There are no migration files.
+- Each domain package exports `Migrate(ctx, db) error`, which calls `database.AutoMigrate(ctx, db, &Model{}, ...)` plus any seed data. `<binary> migrate` runs it under a Postgres advisory lock (`database.WithMigrationLock`), so concurrent pods take turns. In Kubernetes it runs as an **initContainer** before `serve` starts.
+- `AutoMigrate` only adds: new tables, columns, indexes and constraints. It never drops or renames anything. That's fine for a demo. To change a column's shape, recreate the database (drop it, then redeploy).
+- Integration tests run `Migrate` twice to prove it's idempotent.
 
 ### 3.3 HTTP API conventions
 
@@ -195,7 +196,7 @@ CREATE TRIGGER customers_set_updated_at
 
 ### 3.4 Configuration
 
-- **cobra** commands: `serve`, `migrate up|down|status`.
+- **cobra** commands: `serve`, `migrate`.
 - **viper** binds every flag to an environment variable of the same name: `--database-url` ↔ `DATABASE_URL`, `--tier-weights` ↔ `TIER_WEIGHTS`. Flag defaults are the documented defaults.
 - In Kubernetes, plain settings go in the chart's ConfigMap. Database credentials come from CNPG's secret as `PGUSER`/`PGPASSWORD`, which pgx reads natively, so passwords never appear in URLs.
 
@@ -206,8 +207,8 @@ One Go module at the repo root (`github.com/poph2/datastack`) and one shared `Do
 ```
 pkgs/                       # shared by every service
   cli/         root cobra command, flag <-> env binding
-  database/    GORM open (pool, tracing plugin), base Model
-  migrate/     goose runner + `migrate` command
+  database/    GORM open (pool, tracing plugin), base Model, AutoMigrate + updated_at trigger, migration lock
+  migrate/     the `migrate` command (opens the DB, takes the lock, runs the domain's Migrate)
   httpserver/  gin router (otelgin, slog-gin, Prometheus, recovery, probes), error helpers, graceful shutdown
   logging/     slog JSON/text setup
   telemetry/   OTel tracer provider + W3C propagator
@@ -215,9 +216,8 @@ pkgs/                       # shared by every service
 services/<name>/
   main.go      root command: serve + migrate
   serve.go     wiring: logger, tracing, DB, handler, router, run
-  migrations/  embedded goose SQL
   internal/<domain>/
-    model.go       GORM model + enum types
+    model.go       GORM model (its tags are the schema) + enum types + Migrate
     repository.go  GORM queries; maps driver errors to domain errors (ErrNotFound, ...)
     handler.go     gin handlers, request/response types, Store interface
     *_test.go      handler tests (fake Store) + repository tests (real Postgres)
@@ -234,13 +234,13 @@ More patterns, established by the Inventory Service:
 
 - **Concurrency through SQL, not locks.** State changes that must be race-free are one conditional `UPDATE ... WHERE <guard> RETURNING` (GORM: `Model(&x).Clauses(clause.Returning{}).Where(...).Update(col, gorm.Expr(...))`). Under READ COMMITTED, Postgres re-checks the guard against the latest row version, so no explicit transaction or `SELECT ... FOR UPDATE` is needed. A test races many goroutines against it.
 - **Background workers** (`restocker.go`) run beside the HTTP server under `errgroup` in `serve.go`, so they share one lifetime and the DB closes only after both stop. Each run is its own root span. A worker must be safe with several replicas running it (the guard-in-`WHERE` trick again), not depend on leader election.
-- **Seed data is a goose migration** (`00003_seed_catalog.sql`), deterministic, so the existing `migrate up` initContainer loads it and every environment has the same IDs.
+- **Seed data is loaded by `Migrate`** (`seed.go`): deterministic, and inserted only when the table has never held rows (soft-deleted ones count), so it runs in the existing initContainer, never re-seeds, and every environment has the same IDs.
 - **Domain metrics** live in the domain package's `metrics.go` (`<service>_<thing>_total`, low-cardinality labels such as `outcome`). The shared HTTP metrics count requests; domain metrics count what happened to the business.
 
 ### 3.6 Testing
 
 - Handler tests go through the real shared router (`httpserver.NewRouter`) with a fake `Store`.
-- Repository tests run the real migrations against Postgres in testcontainers (`pkgs/pgtest`) and assert the schema behaviour: triggers, constraints, soft delete.
+- Repository tests run the service's real `Migrate` against Postgres in testcontainers (`pkgs/pgtest`) and assert the schema behaviour: triggers, constraints, soft delete.
 - `make test` runs everything (needs Docker). `make test-unit` (`go test -short`) skips the containers.
 
 ## 4. Telemetry (OpenTelemetry)
