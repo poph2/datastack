@@ -21,9 +21,16 @@ port: 8080
 # Plain, non-secret settings, rendered into a ConfigMap and loaded as
 # environment variables. Keys are the binary's flag names in env form (for
 # example TIER_WEIGHTS for --tier-weights).
+#
+# Helm deep-merges this map with each service's values file, so every service
+# inherits the OTel settings below unless it overrides them. Spans go over
+# OTLP gRPC to the collector (`make observability`); the http:// scheme means
+# an insecure connection. pkgs/telemetry exports only when the endpoint is set.
 env:
   LOG_LEVEL: info
   LOG_FORMAT: json
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=kind
 
 postgres:
   # CloudNativePG Cluster this service's database lives in.

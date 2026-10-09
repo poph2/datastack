@@ -1,0 +1,1173 @@
+{
+  "id": null,
+  "uid": "datastack-marketing",
+  "title": "DataStack / Marketing & attribution",
+  "description": "Campaign performance from campaigns, attributions and payments in StarRocks analytics_db.",
+  "tags": [
+    "datastack",
+    "starrocks",
+    "business"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": "",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "datastack"
+      ],
+      "asDropdown": true,
+      "title": "DataStack dashboards",
+      "includeVars": false,
+      "keepTime": true,
+      "icon": "external link",
+      "targetBlank": false,
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Clicks",
+      "description": "How much traffic did campaigns send in the range? Attributions (touchpoints) created.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT COUNT(*) AS clicks FROM attributions a\nWHERE $__timeFilter(a.created_at) AND a.deleted_at IS NULL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 5,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Conversions",
+      "description": "How many touchpoints turned into a paid order in the range (by converted_at)?",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT COUNT(*) AS conversions FROM attributions a\nWHERE $__timeFilter(a.converted_at) AND a.deleted_at IS NULL AND a.order_id IS NOT NULL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 5,
+        "y": 0,
+        "w": 5,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Conversion rate",
+      "description": "What share of clicks in the range converted? Converted attributions / all attributions, by click time.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT SUM(IF(a.order_id IS NOT NULL, 1, 0)) / NULLIF(COUNT(*), 0) AS conversion_rate\nFROM attributions a\nWHERE $__timeFilter(a.created_at) AND a.deleted_at IS NULL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 10,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Attributed cleared revenue",
+      "description": "How much paid revenue did campaigns drive in the range? Revenue is cleared revenue: attributions joined to payments on order_id with payments.status = 'SUCCESS'. attributions.order_amount is what the Order Service reported at conversion; the payment row is the money that actually cleared and stops counting if it is ever refunded.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT COALESCE(SUM(p.amount), 0) AS revenue\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE $__timeFilter(a.converted_at) AND a.deleted_at IS NULL AND a.order_id IS NOT NULL"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "currencyUSD",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 14,
+        "y": 0,
+        "w": 5,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Blended ROAS (lifetime)",
+      "description": "Is paid marketing profitable overall? Lifetime cleared revenue from paid channels / total ad_spend. Lifetime because ad_spend is a campaign total, not a time series. Revenue is cleared revenue: attributions joined to payments on order_id with payments.status = 'SUCCESS'. attributions.order_amount is what the Order Service reported at conversion; the payment row is the money that actually cleared and stops counting if it is ever refunded.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT SUM(r.revenue) / NULLIF(SUM(c.ad_spend), 0) AS roas\nFROM campaigns c\nLEFT JOIN (\n  SELECT utm_source, utm_campaign, SUM(amount) AS revenue FROM (\nSELECT a.utm_source, a.utm_campaign, a.user_id, a.order_id, p.amount\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE a.deleted_at IS NULL AND a.order_id IS NOT NULL) x GROUP BY 1, 2\n) r ON r.utm_source = c.utm_source AND r.utm_campaign = c.utm_campaign\nWHERE c.deleted_at IS NULL AND c.ad_spend > 0"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "none",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 19,
+        "y": 0,
+        "w": 5,
+        "h": 4
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Cleared revenue by channel",
+      "description": "Which channel (utm_source) drives paid revenue in the range? Revenue is cleared revenue: attributions joined to payments on order_id with payments.status = 'SUCCESS'. attributions.order_amount is what the Order Service reported at conversion; the payment row is the money that actually cleared and stops counting if it is ever refunded.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT a.utm_source AS channel, SUM(p.amount) AS revenue\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE $__timeFilter(a.converted_at) AND a.deleted_at IS NULL AND a.order_id IS NOT NULL\nGROUP BY 1\nORDER BY revenue DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "gradientMode": "none",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "revenue"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "channel",
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 9
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Ad spend per campaign",
+      "description": "Where is the budget going? campaigns.ad_spend per (utm_source / utm_campaign). Lifetime totals; organic and email cost $0.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT CONCAT(c.utm_source, ' / ', c.utm_campaign) AS campaign, c.ad_spend\nFROM campaigns c\nWHERE c.deleted_at IS NULL\nORDER BY c.ad_spend DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "gradientMode": "none",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ad_spend"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "campaign",
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 9
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Conversion rate by source",
+      "description": "Which source sends the visitors most likely to buy? Converted attributions / all attributions per utm_source, by click time in the range.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT a.utm_source AS source,\n       SUM(IF(a.order_id IS NOT NULL, 1, 0)) / NULLIF(COUNT(*), 0) AS conversion_rate\nFROM attributions a\nWHERE $__timeFilter(a.created_at) AND a.deleted_at IS NULL\nGROUP BY 1\nORDER BY conversion_rate DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "gradientMode": "none",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percentunit",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conversion_rate"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "source",
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 9
+      }
+    },
+    {
+      "type": "table",
+      "title": "Campaign ROI: ROAS and CAC (lifetime)",
+      "description": "Which campaigns pay back their spend? Per (utm_source, utm_campaign): clicks, conversions, cleared revenue, ad_spend, ROAS = cleared revenue / ad_spend, CAC = ad_spend / distinct converted users. Campaigns with $0 spend show ROAS as ∞ and CAC as $0. Lifetime, because ad_spend is a lifetime total. Revenue is cleared revenue: attributions joined to payments on order_id with payments.status = 'SUCCESS'. attributions.order_amount is what the Order Service reported at conversion; the payment row is the money that actually cleared and stops counting if it is ever refunded.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT c.utm_source, c.utm_campaign,\n       COALESCE(k.clicks, 0) AS clicks,\n       COALESCE(k.conversions, 0) AS conversions,\n       COALESCE(k.conversions, 0) / NULLIF(k.clicks, 0) AS conversion_rate,\n       COALESCE(r.revenue, 0) AS cleared_revenue,\n       c.ad_spend,\n       IF(c.ad_spend = 0, NULL, COALESCE(r.revenue, 0) / c.ad_spend) AS roas,\n       c.ad_spend / NULLIF(r.buyers, 0) AS cac\nFROM campaigns c\nLEFT JOIN (\n  SELECT utm_source, utm_campaign, COUNT(*) AS clicks, SUM(IF(order_id IS NOT NULL, 1, 0)) AS conversions\n  FROM attributions WHERE deleted_at IS NULL GROUP BY 1, 2\n) k ON k.utm_source = c.utm_source AND k.utm_campaign = c.utm_campaign\nLEFT JOIN (\n  SELECT utm_source, utm_campaign, SUM(amount) AS revenue, COUNT(DISTINCT user_id) AS buyers\n  FROM (\nSELECT a.utm_source, a.utm_campaign, a.user_id, a.order_id, p.amount\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE a.deleted_at IS NULL AND a.order_id IS NOT NULL) x GROUP BY 1, 2\n) r ON r.utm_source = c.utm_source AND r.utm_campaign = c.utm_campaign\nWHERE c.deleted_at IS NULL\nORDER BY cleared_revenue DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "utm_source"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Source"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "utm_campaign"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Campaign"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "clicks"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Clicks"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conversions"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Conversions"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "conversion_rate"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Conv. rate"
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cleared_revenue"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cleared revenue"
+              },
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ad_spend"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ad spend"
+              },
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "roas"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "ROAS"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "noValue",
+                "value": "∞ (no spend)"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "green",
+                      "value": 3
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cac"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "CAC"
+              },
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 16,
+        "h": 9
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "CAC by source (lifetime)",
+      "description": "What does it cost to win one paying customer per channel? Sum of ad_spend / distinct converted users with cleared payments. $0-spend channels show $0.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT c.utm_source AS source, SUM(c.ad_spend) / NULLIF(MAX(r.buyers), 0) AS cac\nFROM campaigns c\nLEFT JOIN (\n  SELECT utm_source, COUNT(DISTINCT user_id) AS buyers FROM (\nSELECT a.utm_source, a.utm_campaign, a.user_id, a.order_id, p.amount\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE a.deleted_at IS NULL AND a.order_id IS NOT NULL) x GROUP BY 1\n) r ON r.utm_source = c.utm_source\nWHERE c.deleted_at IS NULL\nGROUP BY c.utm_source\nORDER BY cac DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "gradientMode": "none",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cac"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "source",
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 16,
+        "y": 13,
+        "w": 8,
+        "h": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Clicks per minute by source",
+      "description": "Is each channel sending traffic right now? Attributions created per minute, by utm_source.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(a.created_at, $__interval), a.utm_source AS metric,\n       COUNT(*) * 60000 / $__interval_ms AS clicks_per_min\nFROM attributions a\nWHERE $__timeFilter(a.created_at) AND a.deleted_at IS NULL\nGROUP BY 1, 2\nORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineInterpolation": "smooth",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "1m",
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cleared revenue per minute by source",
+      "description": "Which channel is producing money right now? Revenue is cleared revenue: attributions joined to payments on order_id with payments.status = 'SUCCESS'. attributions.order_amount is what the Order Service reported at conversion; the payment row is the money that actually cleared and stops counting if it is ever refunded.",
+      "datasource": {
+        "type": "mysql",
+        "uid": "starrocks"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "mysql",
+            "uid": "starrocks"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT $__timeGroupAlias(a.converted_at, $__interval), a.utm_source AS metric,\n       SUM(p.amount) * 60000 / $__interval_ms AS revenue_per_min\nFROM attributions a\nJOIN payments p ON p.order_id = a.order_id AND p.status = 'SUCCESS' AND p.deleted_at IS NULL\nWHERE $__timeFilter(a.converted_at) AND a.deleted_at IS NULL AND a.order_id IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineInterpolation": "smooth",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "1m",
+      "id": 12,
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 9
+      }
+    }
+  ]
+}

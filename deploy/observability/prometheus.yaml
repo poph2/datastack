@@ -1,0 +1,104 @@
+# Prometheus server only (chart prometheus-community/prometheus). Installed by
+# `make observability` as release "prometheus"; the Service is prometheus:9090.
+#
+# Scraping: the chart's annotation-based kubernetes-pods job picks up every
+# pod annotated prometheus.io/scrape: "true" (all go-service pods, including
+# cdc-sync-service, plus the OTel Collector). Pod labels become metric labels,
+# so app_kubernetes_io_name="order-service" identifies a service, alongside
+# namespace and pod.
+#
+# Tempo's metrics-generator remote-writes traces_service_graph_* and
+# traces_spanmetrics_* here, hence the remote-write receiver.
+
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+configmapReload:
+  prometheus:
+    resources:
+      requests:
+        cpu: 5m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi
+
+server:
+  fullnameOverride: prometheus
+  extraFlags:
+    - web.enable-lifecycle
+    - web.enable-remote-write-receiver
+  retention: 1d
+  retentionSize: 1GB
+  global:
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    evaluation_interval: 15s
+  # emptyDir: a day of demo data, gone with the pod.
+  persistentVolume:
+    enabled: false
+  service:
+    servicePort: 9090
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# Keep the jobs the demo uses: Prometheus itself, annotated pods, and cAdvisor
+# (container_memory_working_set_bytes and CPU per pod). The rest are off.
+scrapeConfigs:
+  kubernetes-api-servers:
+    enabled: false
+  kubernetes-nodes:
+    enabled: false
+  kubernetes-service-endpoints:
+    enabled: false
+  kubernetes-service-endpoints-slow:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  kubernetes-services:
+    enabled: false
+  kubernetes-pods-slow:
+    enabled: false
+
+# Postgres (CloudNativePG's built-in exporter on :9187, cnpg_* and pg_*
+# metrics) and StarRocks (FE :8030, BE :8040, starrocks_fe_* / starrocks_be_*).
+# Neither pod carries scrape annotations, so they get their own jobs.
+extraScrapeConfigs: |
+  - job_name: cnpg
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [default]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_cnpg_io_cluster]
+        action: keep
+        regex: .+
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: metrics
+      - source_labels: [__meta_kubernetes_pod_label_cnpg_io_cluster]
+        target_label: cluster
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+  - job_name: starrocks
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["starrocks:8030"]
+        labels:
+          component: fe
+      - targets: ["starrocks:8040"]
+        labels:
+          component: be

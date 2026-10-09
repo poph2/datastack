@@ -261,12 +261,39 @@ The goal is one trace per checkout, spanning every service it touches. This depe
 | Inbound spans | `otelgin.Middleware("<service>")` on the API route group (`pkgs/httpserver`) |
 | Outbound spans | HTTP clients use `otelhttp.NewTransport(http.DefaultTransport)`, and requests must be built with the inbound `ctx` (`http.NewRequestWithContext`) |
 | DB spans | GORM OpenTelemetry plugin (`gorm.io/plugin/opentelemetry`), with query variables omitted |
-| Exporter | OTLP gRPC to `otel-collector:4317`, configured by the standard `OTEL_*` env vars. If `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, spans are created (trace IDs still appear in logs) but not exported |
+| Exporter | OTLP gRPC to `http://otel-collector:4317`, configured by the standard `OTEL_*` env vars. The go-service chart sets `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=kind` for every service. If the endpoint is unset (for example with `go run`), spans are created (trace IDs still appear in logs) but not exported |
 | Resource | `service.name=<name>-service`, `deployment.environment=kind` |
 
 Request logs (slog JSON via `slog-gin`) include `trace_id` and `span_id`, so a log line links straight to its trace. Each service also exposes Prometheus metrics at `/metrics`: `http_server_requests_total{route,method,status}` and `http_server_request_duration_seconds`, plus Go runtime metrics.
 
-The collector forwards to Tempo, and Grafana uses Tempo as a datasource. In Tempo's service graph the Order Service appears as the hub, with edges to all five other services.
+### The observability stack on kind
+
+Everything lives in `deploy/observability/` and is installed by `make observability`. Every chart version is pinned in the Makefile.
+
+| Component | Chart (version) | Role |
+|---|---|---|
+| `otel-collector` (:4317 gRPC, :4318 HTTP) | `open-telemetry/opentelemetry-collector` 0.175.1, contrib image | One pipeline: OTLP → memory_limiter → batch → Tempo. Traces only |
+| `tempo` (:4317 ingest, **:3200** query) | `grafana/tempo` 1.24.4 (Tempo 2.9) | Trace store, 24h retention. Its **metrics-generator** (service graphs and span metrics) remote-writes to Prometheus, which is what draws the service map |
+| `prometheus` (:9090) | `prometheus-community/prometheus` 29.36.1 | Server only, 1d retention, remote-write receiver on. Scrapes every pod annotated `prometheus.io/scrape` (all Go services, the collector), plus CNPG (`cnpg_*`), StarRocks FE/BE and cAdvisor container metrics |
+| `grafana` (:3000) | `grafana/grafana` 10.5.15 (Grafana 12.3) | Anonymous Admin, for the local demo only. Datasources with fixed UIDs: `prometheus`, `tempo`, `starrocks` (MySQL protocol to `starrocks:9030/analytics_db`) |
+
+Pod labels become Prometheus labels, so service metrics carry `app_kubernetes_io_name="order-service"` and so on. Tempo's generated metrics are `traces_service_graph_request_*{client,server}` and `traces_spanmetrics_*{service,span_name,span_kind,status_code}`.
+
+### Dashboards
+
+`deploy/observability/dashboards/*.json`, provisioned into the Grafana folder **DataStack** through the `grafana-dashboards` ConfigMap. After editing a dashboard file, run `make dashboards`.
+
+| Dashboard | Source | Answers |
+|---|---|---|
+| Executive | StarRocks | Orders and revenue over time, checkout success rate, failure reasons, revenue by country and loyalty tier |
+| Marketing | StarRocks | Revenue by channel, ROAS and CAC per campaign, conversion rates |
+| Fulfillment | StarRocks | Time to ship p50/p95, backlog, carrier and destination mix, VIP SLA by tier |
+| Inventory | StarRocks | Out-of-stock failures, lost revenue, lowest stock, revenue by category, top sellers |
+| Services | Prometheus | RED per service, the Order Service's downstream calls by peer, checkouts, declines, reservations, shipment backlog |
+| Pipeline | Prometheus + StarRocks | CDC rows/s, lag and batch outcomes per table, freshness of each analytics table |
+| Tracing | Tempo + Prometheus | Live service map, RED from span metrics, failed and slow checkout traces (TraceQL) |
+
+The business dashboards query StarRocks directly, so they show the same rows that the CDC daemon loaded seconds earlier. In Tempo's service graph the Order Service appears as the hub, with edges to all five other services.
 
 ## 5. Analytics Pipeline
 
@@ -302,8 +329,8 @@ Tables synced (seven tables across six databases):
 | Six microservices, CDC Sync App, k6 runner | Images built locally and loaded with `kind load docker-image` |
 | Service wiring | The generic `deploy/charts/go-service` chart, installed once per service as release `<name>-service`: Deployment (migrate initContainer, probes, preStop drain, non-root/read-only), ClusterIP Service, ConfigMap (peer URLs such as `PAYMENT_URL`, plus `OTEL_EXPORTER_OTLP_ENDPOINT`), and a CNPG `Database` |
 | PostgreSQL | CloudNativePG operator (`cnpg/cloudnative-pg`) running one `Cluster` (`deploy/infra/postgres.yaml`). Each service's chart release declares its own logical database. Bitnami's chart was dropped because its free images were discontinued in 2025 |
-| Traces | `open-telemetry/opentelemetry-collector`, `grafana/tempo` |
-| Dashboards | `grafana/grafana`, with Tempo and StarRocks (MySQL protocol, FE port 9030) datasources provisioned |
+| Traces and metrics | OTel Collector, Tempo, Prometheus (§4), installed by `make observability` |
+| Dashboards | Grafana with provisioned datasources and the seven DataStack dashboards (§4). `make grafana` serves it on localhost:3000 |
 | Analytics | StarRocks as one all-in-one pod (`starrocks/allin1-ubuntu`, FE and BE together, 3 GB limit), a StatefulSet plus Service `starrocks` in `deploy/infra/starrocks.yaml` (`make analytics`) |
 | CDC Sync App | The go-service chart with no database of its own and no migrate step, single replica, `Recreate` strategy (`deploy/values/cdc-sync.yaml`). It's stateless, so no PVC |
 | Load | k6 as a continuous Deployment (steady demo traffic) or a CronJob (bursts) |
@@ -314,6 +341,8 @@ Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
 make kind-up                 # create the kind cluster
 make infra                   # CNPG operator + Postgres cluster
 make analytics               # StarRocks (one all-in-one pod, ~3 GB)
+make observability           # OTel Collector, Tempo, Prometheus, Grafana + dashboards
+make grafana                 # Grafana on http://localhost:3000
 make deploy-all              # build, kind load and helm install every service + the CDC daemon
 make deploy-order            # ...or one service at a time
 make load RATE=10            # continuous k6 journeys inside the cluster; make load-stop to end
@@ -322,7 +351,7 @@ make status                  # pods and CNPG databases
 make up && make run-customer # local alternative: Postgres via docker compose + go run
 ```
 
-Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `starrocks`, `datastack-pg-rw`.
+Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `starrocks`, `datastack-pg-rw`, `otel-collector`, `tempo`, `prometheus`, `grafana`.
 
 ### Load generator (k6)
 
@@ -350,4 +379,4 @@ The gaps between the original spec and the per-service narratives, and how they 
 9. **Double charges:** a partial unique index lets an order have at most one successful payment (`409 ALREADY_PAID`).
 10. **Shipment packing:** a database-driven worker (`FOR UPDATE SKIP LOCKED`, capacity per tick), not an in-memory queue, so it is safe with several replicas and survives restarts.
 11. **CDC state:** no watermark file. Cursors are re-derived from StarRocks at startup, and loads are idempotent upserts (see [cdc-sync.md](cdc-sync.md)).
-12. **Runtime target:** `CLAUDE.md` still describes Docker Compose, NATS, ClickHouse, and Prometheus. This design uses kind, synchronous HTTP, StarRocks, and OTel/Tempo, so `CLAUDE.md` should be updated to match.
+12. **Runtime target:** kind (not Docker Compose), synchronous HTTP between services (no message broker), StarRocks as the only analytical store, and OTel/Tempo plus Prometheus/Grafana for observability. The earlier Ollama agent, Metabase and Next.js UI plans were dropped.

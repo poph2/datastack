@@ -29,7 +29,7 @@ DataStack's Go code is read far more than it's written — by teammates, and by 
 
 ## Package Shape
 
-- One package per bounded concept (e.g. `customer`, `inventory`, `orchestrator`, `clock`), not one giant `models` or `utils` package.
+- One package per bounded concept (e.g. `customer`, `inventory`, `order`, `cdc`), not one giant `models` or `utils` package.
 - A package's `New(...)` constructor should return a ready-to-use value with all required dependencies passed in explicitly — no hidden global state, no `init()` magic for anything business-logic related.
 - Concurrency primitives (channels, mutexes) are owned by the package that needs them and are never exported as raw fields; expose methods instead.
 

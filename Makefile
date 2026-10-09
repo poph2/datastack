@@ -8,6 +8,10 @@ KUBECTL      := kubectl --context $(KUBE_CONTEXT)
 HELM         := helm --kube-context $(KUBE_CONTEXT)
 
 CNPG_CHART_VERSION ?= 0.29.1
+OTEL_COLLECTOR_CHART_VERSION ?= 0.175.1
+TEMPO_CHART_VERSION          ?= 1.24.4
+PROMETHEUS_CHART_VERSION     ?= 29.36.1
+GRAFANA_CHART_VERSION        ?= 10.5.15
 
 # A fresh tag per make invocation, so a redeploy always rolls the pods.
 IMAGE_TAG := dev-$(shell date +%Y%m%d%H%M%S)
@@ -26,7 +30,8 @@ port_for       = $(or $(call service_field,$(1),3),$(if $(filter cdc-sync,$(1)),
 # Journeys per second for `make load`.
 RATE ?= 5
 
-.PHONY: up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status
+.PHONY: up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status \
+        observability dashboards dashboards-configmap grafana
 
 ## Local Postgres (docker compose) for `go run` development
 
@@ -81,6 +86,41 @@ infra:
 analytics:
 	$(KUBECTL) apply -f deploy/infra/starrocks.yaml
 	$(KUBECTL) rollout status statefulset/starrocks --timeout=10m
+
+## Observability: OTel Collector -> Tempo, Prometheus, Grafana (about 1.5 GB of limits)
+
+# Installs or upgrades the whole stack. Values live in deploy/observability/.
+# The dashboards ConfigMap goes first: Grafana's pod mounts it.
+observability: dashboards-configmap
+	helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update
+	helm repo add grafana https://grafana.github.io/helm-charts --force-update
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+	$(HELM) upgrade --install prometheus prometheus-community/prometheus --version $(PROMETHEUS_CHART_VERSION) \
+		-f deploy/observability/prometheus.yaml --wait --timeout 5m
+	$(HELM) upgrade --install tempo grafana/tempo --version $(TEMPO_CHART_VERSION) \
+		-f deploy/observability/tempo.yaml --wait --timeout 5m
+	$(HELM) upgrade --install otel-collector open-telemetry/opentelemetry-collector --version $(OTEL_COLLECTOR_CHART_VERSION) \
+		-f deploy/observability/otel-collector.yaml --wait --timeout 5m
+	$(HELM) upgrade --install grafana grafana/grafana --version $(GRAFANA_CHART_VERSION) \
+		-f deploy/observability/grafana.yaml --wait --timeout 5m
+
+# Builds the grafana-dashboards ConfigMap from deploy/observability/dashboards/*.json.
+# Server-side apply: a client-side apply would copy the whole ConfigMap into the
+# last-applied annotation, which is capped at 256 KB.
+dashboards-configmap:
+	$(KUBECTL) create configmap grafana-dashboards \
+		$(addprefix --from-file=,$(wildcard deploy/observability/dashboards/*.json)) \
+		--dry-run=client -o yaml | $(KUBECTL) apply --server-side --force-conflicts -f -
+
+# Refreshes the dashboards and restarts Grafana so it loads them right away
+# (it would otherwise notice within a minute or two, once the kubelet syncs).
+dashboards: dashboards-configmap
+	$(KUBECTL) rollout restart deployment/grafana
+	$(KUBECTL) rollout status deployment/grafana --timeout=2m
+
+# Grafana on http://localhost:3000 (anonymous admin, no login).
+grafana:
+	$(KUBECTL) port-forward svc/grafana 3000:3000
 
 ## Services, e.g. `make deploy-customer`, `make deploy-cdc-sync`
 

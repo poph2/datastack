@@ -4,283 +4,98 @@ This file guides AI assistants working on DataStack.
 
 ## Project Summary
 
-DataStack is a demo project for the Data Engineering Things Summit. It demonstrates a modern data ingestion and analytics workflow:
+DataStack is a demo for the Data Engineering Things Summit. It runs a small e-commerce business as six Go microservices on a local Kubernetes (kind) cluster, drives it with k6 traffic, streams every database change into StarRocks, and makes the whole system observable:
 
-1. Multiple operational Postgres databases produce source data.
-2. A single Go orchestrator binary simulates a realistic e-commerce business: an Orchestrator Engine drives four in-process domain microservices (Customer, Inventory, Sales, Invoicing) over in-memory Go channels, and each microservice writes directly into its own Postgres database.
-3. Custom Go applications ingest that data into an analytical database.
-4. StarRocks is the analytical database target.
-5. Ollama powers a reasoning agent that can answer questions over the analytical data.
-6. The agent can run read-oriented SQL against StarRocks.
-7. Prometheus and Grafana expose operational and analytical observability across services, databases, and pipelines.
-8. A Next.js UI presents the system as a polished founder-demo style product.
+1. **Operational layer:** six Go REST microservices (Order, Customer, Marketing, Inventory, Payment, Shipment). Each one owns its own Postgres database and talks to the others over synchronous HTTP JSON.
+2. **Load:** k6 runs inside the cluster and simulates customer journeys (sign up, ad click, checkout) at a configurable rate.
+3. **Analytical layer:** a Go CDC sync daemon polls every table by `(updated_at, id)` and loads micro-batches into StarRocks over Stream Load.
+4. **Observability layer:** every service emits OpenTelemetry traces (Collector → Tempo) and Prometheus metrics. Grafana shows traces, the service map, service and pipeline metrics, and business dashboards that query StarRocks directly.
 
-## Current Product Direction
+The architecture spec, and the source of truth for conventions, is [docs/microservices/README.md](docs/microservices/README.md). **Read its §3 "Shared Conventions" before writing or changing any service.**
 
-- Project name: DataStack.
-- Analytical database: StarRocks.
-- Source systems to simulate first: Customer, Inventory, Sales, and Invoicing Postgres databases (see [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec).
-- Source traffic: a single Go binary ("orchestrated data engine") running an Orchestrator Engine plus four domain microservices as goroutines, communicating exclusively over in-memory Go channels — no message broker, no network hop between them.
-- Simulator coordination model: in-process command/event channels only. Each domain microservice owns its own Postgres database and connection pool; the Orchestrator never touches schema or writes to a database directly.
-- No message broker for this subsystem: NATS was the original plan but is dropped in favor of zero-overhead in-memory channels within the single binary. (NATS may return later if a domain ever needs to run as an independent process.)
-- Go ORM: GORM, with each microservice running its own `AutoMigrate` independently at boot (decentralized, self-managed migrations).
-- Historical backfill: on startup the Orchestrator fast-forwards simulated time from January 1st of the current year to now at 1 simulated day per real-time second, then switches to a 250ms real-time tick.
-- Ingestion mode for the first version: polling by `updated_at` watermarks.
-- Local runtime: Docker Compose first.
-- Go layout: one Go workspace, one Go binary. It contains the Orchestrator Engine, the four domain microservices, the ingestion worker, the control API, and the agent package, all in a single process.
-- First backend shape: clear internal package boundaries for the orchestrator, microservices, ingestion, control, and agent behavior, even though they all ship in one binary.
-- API style: REST JSON.
-- Next.js app location: `apps/web`.
-- Next.js package manager: npm.
-- Local Ollama model: `qwen2.5-coder`.
-- Ollama model startup: document the manual model pull instead of pulling automatically in Compose.
-- First analytical emphasis: revenue and fulfillment.
-- First UI screen: live command center.
-- Observability stack: Prometheus for metrics collection and Grafana for dashboards.
-- Metrics coverage: Go microservices, Postgres databases, the orchestrator's simulated clock and state cache, StarRocks, ingestion progress, agent activity, and demo business throughput.
-- Primary implementation languages:
-  - Go for backend applications and pipeline services.
-  - Next.js for the UI.
-- Agent capabilities:
-  - Generate SQL from natural-language questions.
-  - Execute safe analytical queries against StarRocks.
-- UI direction: polished founder demo, but still useful as an operator console.
-
-## Intended Architecture
+## Architecture
 
 ```mermaid
 flowchart LR
-  Orchestrator[Orchestrator Engine] -- CreateCustomerCmd --> CustomerSvc[Customer microservice]
-  Orchestrator -- RestockInventoryCmd --> InventorySvc[Inventory microservice]
-  Orchestrator -- CreateSaleCmd --> SalesSvc[Sales microservice]
-  Orchestrator -- ProcessPaymentCmd --> InvoicingSvc[Invoicing microservice]
-  SalesSvc -- OrderCreatedEvent --> InvoicingSvc
-  CustomerSvc --> CustomerDB[(customer)]
-  InventorySvc --> InventoryDB[(inventory)]
-  SalesSvc --> SalesDB[(sales)]
-  InvoicingSvc --> InvoicingDB[(invoicing)]
-  Ingestor[Go ingestion worker] --> ControlAPI[Go control API]
-  ControlAPI --> Agent[Go agent package]
-  ControlAPI --> Orchestrator
-  CustomerDB --> Ingestor
-  InventoryDB --> Ingestor
-  SalesDB --> Ingestor
-  InvoicingDB --> Ingestor
-  Ingestor --> StarRocks[(StarRocks analytics)]
-  UI[Next.js UI] --> ControlAPI
-  UI --> Agent
-  Agent --> Ollama[Ollama]
-  Agent --> StarRocks
+  k6[k6 load] --> Order[Order :8080]
+  k6 --> Customer[Customer :8081]
+  k6 --> Marketing[Marketing :8082]
+  Order --> Customer
+  Order --> Inventory[Inventory :8083]
+  Order --> Payment[Payment :8084]
+  Order --> Marketing
+  Order --> Shipment[Shipment :8085]
+  Order & Customer & Marketing & Inventory & Payment & Shipment --> PG[(Postgres: one CNPG cluster, one database per service)]
+  PG --> CDC[CDC sync :8090] --> SR[(StarRocks analytics_db)]
+  Order & Customer & Marketing & Inventory & Payment & Shipment -. OTLP .-> Collector[OTel Collector] --> Tempo[(Tempo)]
+  Prometheus[(Prometheus)] -. scrapes /metrics .-> Order & CDC
+  Tempo -. service graph .-> Prometheus
+  Grafana --> Tempo & Prometheus & SR
 ```
 
-All of the above (Orchestrator, microservices, ingestion worker, control API, agent package) ship as **one single Go binary**. Only the Postgres databases, StarRocks, Ollama, and the Next.js UI are separate processes.
+The Order Service is the only one that calls other services. It orchestrates checkout: validate customer → reserve stock (which prices the order) → charge → record conversion → request shipment. The others are leaf nodes.
 
-## Microservice Communication Model
+## Repository Layout
 
-The Orchestrator and all four domain microservices communicate over **strongly-typed, in-memory Go channels** — no message broker, no HTTP hop between them. The Orchestrator sends `ProcessPaymentCmd` directly to the Invoicing microservice (payment settlement events) in addition to Sales's `OrderCreatedEvent`. See [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec (domain lifecycle, schemas, backfill algorithm, message payloads, telemetry).
+```
+pkgs/                 shared Go packages: cli, database (GORM, base Model, AutoMigrate), migrate,
+                      httpserver (gin router, errors, metrics), httpclient (service-to-service),
+                      logging, telemetry, pgtest (testcontainers Postgres)
+services/<name>/      one binary per service: main.go, serve.go, internal/<domain>/
+services/cdc-sync/    the Postgres → StarRocks sync daemon
+deploy/charts/go-service/  ONE generic Helm chart for every Go service
+deploy/values/        per-service values for that chart
+deploy/infra/         CNPG Postgres cluster, StarRocks
+deploy/observability/ Collector, Tempo, Prometheus and Grafana values, plus dashboards/*.json
+deploy/k6/            the load script and its Deployment
+deploy/kind/          kind cluster config
+docs/microservices/   architecture README + one doc per service + cdc-sync.md
+docker-compose.yml    a local Postgres only, for `go run` development
+```
 
-The ingestion worker, control API, and agent package are internal packages of the same binary, calling each other directly in-process. The control API starts/stops the Orchestrator with a plain in-process function call — there is no network hop anywhere in this subsystem.
+One Go module at the repo root (`github.com/poph2/datastack`), Go 1.26, one shared `Dockerfile` (`--build-arg SERVICE=<name>`).
 
-Why this shape:
+## Running It
 
-- Zero network overhead: channel sends/receives are essentially free compared to a broker round-trip.
-- Still keeps domains independent: each microservice owns its own Postgres database, connection pool, and GORM `AutoMigrate` lifecycle; the Orchestrator never touches schema or writes to a database directly.
-- Gives the live demo a clear story: one orchestrated business flow produces many operational writes across four Postgres databases.
-- Avoids one simulator becoming a hidden central database client for all domains.
+```sh
+make kind-up            # create the kind cluster
+make infra              # CloudNativePG operator + Postgres
+make analytics          # StarRocks (~3 GB of memory)
+make observability      # OTel Collector, Tempo, Prometheus, Grafana + dashboards
+make deploy-all         # build, kind load and helm install every service + CDC
+make load RATE=10       # k6 journeys per second (make load-stop to stop)
+make grafana            # Grafana on http://localhost:3000
+make forward-order      # any service on its own port: forward-<name>
+make status             # pods and databases
+```
 
-Do not reintroduce NATS or a separate simulator-per-container model for this subsystem unless a domain later needs to run as an independent process outside the binary.
+Local development without kind: `make up` (Postgres in Docker Compose), then `make run-<service>`.
 
-## Observability Model
+## Rules for Assistants
 
-Use Prometheus and Grafana as a first-class part of the demo. This should show what is happening inside the microservices, the operational databases, the ingestion pipeline, and the analytical database.
+- **Always target the kind cluster explicitly.** The user's kubeconfig also contains production clusters. Use the Makefile targets, or pass `--context kind-datastack` to kubectl and `--kube-context kind-datastack` to helm. Never rely on the current context.
+- **Follow the conventions in docs/microservices/README.md §3.** In short:
+  - **Schema:** the GORM model is the schema (`AutoMigrate`, named CHECKs, partial unique indexes on `deleted_at IS NULL`). Embed `database.Model`. Postgres is the only clock for `created_at`/`updated_at`. Soft deletes only.
+  - **Concurrency:** use guarded SQL (`UPDATE ... WHERE <guard> RETURNING`), not locks or read-then-write. That covers stock, state transitions and conversions.
+  - **Money:** `shopspring/decimal`, serialised as fixed two-decimal strings. Never `float64`.
+  - **HTTP:** `400` means bad input, `404` an unknown entity, `409` a conflict with current state. Errors use the shared `{"error": CODE, "message"}` body. Business failures are data (4xx), not 5xx.
+  - **Calls between services:** use `pkgs/httpclient` with a per-peer timeout. Never retry anything that isn't idempotent.
+  - **Background workers:** run them beside the HTTP server under `errgroup`, and make them safe with several replicas.
+  - **Configuration:** cobra + viper. Every flag is also an env var (`--tier-weights` ↔ `TIER_WEIGHTS`).
+- **Go style:** follow [.github/skills/go-clean-code/SKILL.md](.github/skills/go-clean-code/SKILL.md). Run `make lint` (gofmt, vet, helm lint) and `make test` before calling Go work done.
+- **Tests:** handler tests go through the real `httpserver.NewRouter` with a fake store. Repository tests run the service's real `Migrate` against Postgres via `pkgs/pgtest` (needs Docker; `make test-unit` skips them). Race-sensitive SQL gets a concurrency test.
+- **Resources:** every workload declares CPU/memory requests and limits. See [.github/skills/local-resources/SKILL.md](.github/skills/local-resources/SKILL.md).
+- **New service checklist:** `services/<name>/` modelled on an existing service, `deploy/values/<name>.yaml`, an entry in the Makefile's `SERVICE_TABLE`, a `docs/microservices/<name>-service.md` in the "built" format, and the ecosystem README updated.
+- **Rolling out a changed chart default** to a running release needs `helm upgrade --reset-then-reuse-values`. Plain `--reuse-values` silently ignores new defaults. `make deploy-<name>` passes the values file, so it's unaffected.
+- **Dashboards** are JSON in `deploy/observability/dashboards/` and reference datasources by UID (`prometheus`, `tempo`, `starrocks`). Validate SQL against StarRocks and PromQL against Prometheus before committing, then run `make dashboards`.
+- Don't commit unless asked.
 
-Recommended approach:
+## Documentation
 
-- Add Prometheus to Docker Compose.
-- Add Grafana to Docker Compose with provisioned datasources and starter dashboards.
-- Every Go service should expose a `/metrics` endpoint using Prometheus-compatible metrics.
-- Use Postgres exporters for the Customer, Inventory, Sales, and Invoicing Postgres databases.
-- Use StarRocks metrics (its FE/BE Prometheus-format `/metrics` endpoints) so Prometheus can observe analytical database health and query activity.
-- Grafana should use Prometheus for infrastructure and service metrics.
-- Grafana may also use StarRocks directly (via its MySQL datasource) for business analytics dashboards when useful.
+- [docs/microservices/README.md](docs/microservices/README.md): topology, call graph, the checkout journey, shared conventions (§3), telemetry, analytics pipeline, deployment, design decisions.
+- `docs/microservices/<service>-service.md`: each service's data model, API contract, configuration, metrics, and analytics impact.
+- [docs/microservices/cdc-sync.md](docs/microservices/cdc-sync.md): the CDC daemon (stateless cursors, schema reflection, Stream Load semantics).
 
-Important metrics to expose from Go services:
+## Not in Scope
 
-- Scenario commands dispatched by target microservice and command type.
-- Domain events/commands processed by service and outcome.
-- Rows written by microservice, table, and source domain.
-- Ingestion rows loaded by source table.
-- Ingestion lag by source table and watermark.
-- StarRocks insert duration and failures.
-- Agent questions asked, SQL generation failures, query duration, and dashboard creation attempts.
-- HTTP request counts, latency, and errors for REST APIs.
-
-Important database dashboards:
-
-- Customer Postgres growth: new accounts, table sizes, connections, and write latency.
-- Inventory Postgres growth: stock movements, low-stock events, table sizes, connections, and write latency.
-- Sales Postgres growth: orders inserted per minute, table sizes, connections, and write latency.
-- Invoicing Postgres growth: invoices generated, payment status mix, table sizes, connections, and write latency.
-- StarRocks analytics: inserted rows, query duration, storage size, failed queries, and ingestion freshness.
-- End-to-end pipeline freshness: latest Postgres `updated_at` compared with latest StarRocks watermark.
-
-Grafana should answer operational questions such as:
-
-- Is the orchestrator binary running and producing traffic?
-- Are all four Postgres databases growing?
-- How far has the simulated clock progressed through the historical backfill?
-- Is StarRocks receiving fresh analytical data?
-- Which source table is lagging behind?
-- How many natural-language questions and dashboard requests has the agent handled?
-
-## Applications To Build
-
-All of the following ship as internal packages of **one single Go binary** (see the Intended Architecture diagram above).
-
-### Go Orchestrated Data Engine
-
-Responsible for driving realistic cross-domain business activity. See [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the full spec (domain lifecycle, schemas, backfill algorithm, message payloads, telemetry, connection pooling).
-
-Expected first-version behavior:
-
-- Run as a single Go binary in Docker Compose (no NATS, no per-domain containers).
-- Orchestrator Engine dispatches commands to the Customer, Inventory, Sales, and Invoicing microservices over in-memory Go channels; Sales emits `OrderCreatedEvent` to Invoicing the same way.
-- Each microservice owns its own Postgres database, connection pool, and GORM `AutoMigrate` lifecycle; the Orchestrator never touches schema.
-- On boot: wait for all microservices to finish migrating, calibrate the simulated clock to January 1st of the current year, fast-forward at 1 simulated day per real-time second until caught up to now, then switch to a 250ms real-time tick.
-- Maintain a thread-safe in-memory state cache of valid Customer IDs and Inventory SKUs so Sales commands never reference missing master data.
-- Expose Prometheus metrics for ticks, simulated time, commands dispatched, events processed, processing latency, bytes written, and state cache size.
-
-Example scenarios:
-
-- New customer signs up, receives a CRM account, places an order, inventory is reserved, payment is captured, and fulfillment begins.
-- Existing customer places a large order that causes low stock in one warehouse.
-- Inventory replenishment arrives and reduces fulfillment risk.
-- A payment fails, causing order status and revenue reporting to change.
-
-### Go Ingestion Worker
-
-Responsible for moving data from Postgres sources into StarRocks. See [docs/GO-INGESTION-WORKER-ARCHITECTURE.md](docs/GO-INGESTION-WORKER-ARCHITECTURE.md) for the full spec (schema reflection, watermark polling, micro-batch flushing, the semantic context it builds for the agent package, and telemetry).
-
-Expected first-version behavior:
-
-- Read configured Postgres sources and tables.
-- Poll incrementally using an `updated_at` column.
-- Track watermarks per source table.
-- Write into StarRocks tables designed for analytics.
-- Emit structured logs useful during a live demo.
-- Expose Prometheus metrics for rows ingested, ingestion lag, batch duration, StarRocks insert failures, and source read failures.
-- Prefer simple, reliable behavior before adding CDC.
-
-### Go Backend API
-
-Responsible for exposing pipeline and agent behavior to the UI. It is one internal package of the single Go binary, with clear boundaries from the orchestrator, microservices, ingestion worker, and agent packages.
-
-Expected first-version behavior:
-
-- Report source connectivity.
-- Report target StarRocks connectivity.
-- Report table-level ingestion state, including latest watermark and rows loaded.
-- Expose a simple endpoint to trigger or observe ingestion runs if the worker supports it.
-- Expose REST JSON endpoints for the Next.js UI.
-- Expose Prometheus metrics for HTTP traffic, service health checks, and agent/control operations.
-
-### Go Agent Package
-
-Responsible for natural-language data interaction inside the Go backend API.
-
-Expected first-version behavior:
-
-- Talk to Ollama for reasoning and SQL generation.
-- Restrict generated SQL to safe analytical queries by default.
-- Execute StarRocks queries and return tabular results.
-- Return generated SQL alongside answers so the demo is transparent.
-- Expose Prometheus metrics for questions asked, SQL generated, query duration, and query failures.
-
-### Next.js UI
-
-Responsible for the presentation and operator experience.
-
-Expected first-version views:
-
-- Live command center as the first screen.
-- Architecture overview of the running stack.
-- Pipeline status for Orders, CRM, and Inventory sources.
-- Chat interface for asking questions about the data.
-- Query result viewer that shows generated SQL and returned rows.
-- Observability links or embedded views for Prometheus/Grafana status where helpful.
-
-Design direction:
-
-- Founder-demo polish: clear, confident, and presentation-ready.
-- Avoid a marketing landing page as the default screen.
-- The first screen should be the working product experience.
-- Make operational state easy to scan during a live talk.
-
-## Data Model Direction
-
-Use realistic but compact demo datasets.
-
-Suggested source domains:
-
-- Customer: customer accounts (see [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) for the exact `customers` schema).
-- Inventory: products/SKUs and stock levels (`products` table).
-- Sales: orders (`orders` table).
-- Invoicing: invoices generated from orders (`invoices` table).
-
-StarRocks tables should be shaped for analytical questions such as:
-
-- Revenue by customer.
-- Revenue by order status and time period.
-- Fast-moving products (SKUs) by units sold.
-- Orders at risk because inventory (SKU stock) is low.
-- Customers with high revenue and unpaid or pending invoices.
-- Fulfillment exposure by product and customer.
-
-## Architecture Documents
-
-- [docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md](docs/MICROSERVICES-AND-ORCHESTRATOR-ARCHITECTURE.md) — the detailed spec for the Go orchestrated data engine (domain lifecycle, per-database schemas, the fast-forward backfill algorithm, message payloads, Prometheus metric names, and operational optimizations). Read it before implementing the orchestrator, the Customer/Inventory/Sales/Invoicing microservices, or their schemas.
-- [docs/GO-INGESTION-WORKER-ARCHITECTURE.md](docs/GO-INGESTION-WORKER-ARCHITECTURE.md) — the detailed spec for the Go ingestion worker (zero-ETL watermark polling, StarRocks schema/DDL generation, the two-tier semantic context it builds for the agent package, and telemetry). Read it before implementing ingestion.
-- Other subsystems (backend API, agent, Next.js UI) will each get their own architecture document under `docs/` as they're designed in detail.
-
-## Engineering Preferences
-
-- Keep the first version runnable with `docker compose up`.
-- Prefer boring, explicit service boundaries over clever abstractions.
-- Prefer existing packages and frameworks instead of custom infrastructure.
-- Keep Go services small and independently understandable.
-- Keep the UI in Next.js and avoid introducing a second frontend framework.
-- Do not add Kubernetes, CDC, or multi-warehouse abstractions until the basic demo works end to end.
-- Favor code and working commands over prose-only documentation.
-
-## Safety And Guardrails
-
-- The data agent must default to read-only SQL execution.
-- Any SQL generation should be constrained to known analytical schemas.
-- Do not allow destructive SQL from natural-language prompts.
-- Return generated SQL to the UI/API caller for transparency.
-
-## Open Questions
-
-These decisions are not final yet:
-
-- The exact visual identity of the Next.js UI.
-- Exact StarRocks schema shape for revenue and fulfillment analytics.
-- Exact API contract between the Next.js UI and Go services.
-- Exact boundaries between Go internal packages in the single binary.
-
-## Recommended Next Step
-
-Start by creating a minimal Docker Compose stack with:
-
-- Customer Postgres (`customer`).
-- Inventory Postgres (`inventory`).
-- Sales Postgres (`sales`).
-- Invoicing Postgres (`invoicing`).
-- StarRocks.
-- Ollama.
-- Prometheus.
-- Grafana.
-- Go orchestrated data engine (single binary: Orchestrator Engine + four domain microservices, ingestion worker, control API, and agent package).
-- Next.js UI in `apps/web`.
-
-Then seed the Postgres databases with a small dataset and prove one end-to-end path: source row to StarRocks row to agent answer.
+The earlier plans for an Ollama data agent, Metabase, and a Next.js operator UI were dropped with the microservices redesign. `apps/web` is a leftover from that design: it targets the old single backend and the old compose Prometheus, and isn't wired into the kind stack.

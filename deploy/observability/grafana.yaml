@@ -1,0 +1,145 @@
+# Grafana (chart grafana/grafana). Installed by `make observability` as release
+# "grafana", which is also its Service name (grafana:3000; `make grafana`
+# forwards it to localhost:3000).
+#
+# Local demo settings: anonymous Admin, no login form, embedding allowed.
+# Datasources are provisioned with fixed UIDs (prometheus, tempo, starrocks)
+# that the dashboard JSON refers to. Dashboards come from the ConfigMap
+# "grafana-dashboards", which `make observability` / `make dashboards` build
+# from deploy/observability/dashboards/*.json, and land in the "DataStack"
+# folder.
+
+fullnameOverride: grafana
+
+adminUser: admin
+adminPassword: admin
+
+service:
+  port: 3000
+
+testFramework:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+grafana.ini:
+  analytics:
+    check_for_updates: false
+    check_for_plugin_updates: false
+    reporting_enabled: false
+  news:
+    news_feed_enabled: false
+  users:
+    allow_sign_up: false
+  auth:
+    disable_login_form: true
+  auth.anonymous:
+    enabled: true
+    org_name: Main Org.
+    org_role: Admin
+  security:
+    allow_embedding: true
+    cookie_samesite: disabled
+  dashboards:
+    default_home_dashboard_path: ""
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    deleteDatasources:
+      - name: Prometheus
+        orgId: 1
+      - name: Tempo
+        orgId: 1
+      - name: StarRocks
+        orgId: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          timeInterval: 15s
+          exemplarTraceIdDestinations:
+            - name: trace_id
+              datasourceUid: tempo
+
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo:3200
+        editable: false
+        jsonData:
+          httpMethod: GET
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+          search:
+            hide: false
+          traceQuery:
+            timeShiftEnabled: true
+            spanStartTimeShift: 1h
+            spanEndTimeShift: -1h
+          tracesToMetrics:
+            datasourceUid: prometheus
+            spanStartTimeShift: -2m
+            spanEndTimeShift: 2m
+            tags:
+              - key: service.name
+                value: service
+            queries:
+              - name: Request rate
+                query: sum(rate(traces_spanmetrics_calls_total{$$__tags}[1m]))
+              - name: Error rate
+                query: sum(rate(traces_spanmetrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[1m]))
+              - name: p95 latency
+                query: histogram_quantile(0.95, sum by (le) (rate(traces_spanmetrics_latency_bucket{$$__tags}[1m])))
+
+      - name: StarRocks
+        uid: starrocks
+        type: mysql
+        access: proxy
+        url: starrocks:9030
+        user: root
+        database: analytics_db
+        editable: false
+        jsonData:
+          database: analytics_db
+          timezone: "+00:00"
+          maxOpenConns: 10
+          maxIdleConns: 5
+          connMaxLifetime: 14400
+        secureJsonData:
+          password: ""
+
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: datastack
+        orgId: 1
+        folder: DataStack
+        folderUid: datastack
+        type: file
+        disableDeletion: false
+        allowUiUpdates: true
+        updateIntervalSeconds: 10
+        options:
+          path: /var/lib/grafana/dashboards/datastack
+
+# Mounted at /var/lib/grafana/dashboards/datastack. The ConfigMap must exist
+# before Grafana starts; the Makefile creates it first.
+dashboardsConfigMaps:
+  datastack: grafana-dashboards

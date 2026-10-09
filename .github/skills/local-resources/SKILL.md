@@ -1,112 +1,49 @@
 ---
-name: docker-compose-local-resources
-description: "Use when writing, editing, reviewing, or validating Docker Compose for DataStack, docker-compose.yml, compose.yaml, services, containers, local Docker, memory limits, CPU limits, resource budgets, Prometheus, Grafana, Postgres, StarRocks, Ollama, Go services, or Next.js services. Always ensure every Compose service has appropriate local-machine CPU and memory allowances."
-argument-hint: "Docker Compose file or service change to resource-budget"
+name: local-resources
+description: "Use when adding or changing anything that runs on DataStack's kind cluster or in docker-compose: Helm values, deploy/values/*.yaml, the go-service chart, deploy/infra or deploy/observability manifests, StarRocks, Postgres, Prometheus, Grafana, Tempo, the OTel Collector, k6, or a new Go service. Ensures every workload declares CPU and memory requests and limits that fit a laptop."
+argument-hint: "Workload, chart values, or manifest being resource-budgeted"
 ---
 
-# Docker Compose Local Resources
+# Local Resources (DataStack)
 
-Use this skill whenever creating, changing, or reviewing Docker Compose configuration for DataStack.
-
-DataStack runs locally during development and demos. Docker Compose must therefore protect the developer machine by giving every running service explicit CPU and memory allowances.
+DataStack runs on a developer laptop: one kind node inside Docker Desktop, with roughly 8 GB of memory for everything. A single workload without limits, or with oversized ones, can make the demo machine unusable mid-talk. Every workload therefore declares explicit requests and limits.
 
 ## Core Rule
 
-Every service in `docker-compose.yml` or any Compose override file must define local resource limits.
+Every container on the kind cluster has `resources.requests` and `resources.limits` for both `cpu` and `memory`:
 
-For local Docker Compose, prefer fields that are applied by regular `docker compose up`:
+- **Go services** get them from the go-service chart's `resources` default (`deploy/charts/go-service/values.yaml`). Override in `deploy/values/<service>.yaml` only with a measured reason.
+- **Raw manifests** (`deploy/infra/*.yaml`, `deploy/k6/deployment.yaml`) set them inline.
+- **Third-party Helm charts** (CNPG, Collector, Tempo, Prometheus, Grafana) set them in the values file, and disable chart components we don't use (for example Prometheus's alertmanager, pushgateway, node-exporter and kube-state-metrics).
+- `docker-compose.yml` (local Postgres only) uses `mem_limit`, `memswap_limit` equal to `mem_limit`, and `cpus`.
 
-```yaml
-mem_limit: 512m
-memswap_limit: 512m
-cpus: 0.50
-```
+## Current Budget
 
-Do not rely only on `deploy.resources` for local development. `deploy.resources` is useful documentation and may matter in Swarm-like contexts, but DataStack's first runtime target is a local machine using Docker Compose.
+| Workload | Requests | Limits | Where |
+|---|---|---|---|
+| Each Go service (×7 incl. cdc-sync) | 50m / 64Mi | 500m / 256Mi | go-service chart default |
+| Postgres (CNPG, all six databases) | 100m / 256Mi | 1 CPU / 1Gi | `deploy/infra/postgres.yaml` |
+| StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 3Gi | `deploy/infra/starrocks.yaml` |
+| k6 | 100m / 64Mi | 1 CPU / 256Mi | `deploy/k6/deployment.yaml` |
+| OTel Collector | 25m / 64Mi | 250m / 192Mi | `deploy/observability/otel-collector.yaml` |
+| Tempo | 50m / 192Mi | 500m / 640Mi | `deploy/observability/tempo.yaml` |
+| Prometheus (+ config reloader 5m / 16Mi) | 50m / 256Mi | 500m / 768Mi | `deploy/observability/prometheus.yaml` |
+| Grafana | 50m / 128Mi | 500m / 384Mi | `deploy/observability/grafana.yaml` |
+
+The whole stack measured at about 5.2 GiB of working-set memory on a 7.65 GiB kind node, with k6 at 5 journeys per second.
+
+StarRocks is the dominant cost. If the machine struggles, it's the first thing to stop (`kubectl --context kind-datastack scale statefulset/starrocks --replicas=0`). The services keep running, and CDC retries until StarRocks is back.
 
 ## Procedure
 
-1. Identify every service that can run under Compose.
-2. Classify each service by role: database, analytics database, LLM runtime, BI tool, metrics, exporter, broker, Go service, Next.js UI, or utility job.
-3. Assign `mem_limit`, `memswap_limit`, and `cpus` to every service.
-4. Keep limits realistic for a laptop demo. Do not over-allocate the whole machine by default.
-5. Use profiles for heavy or optional services when the full stack may exceed a normal laptop budget.
-6. After editing Compose, run `docker compose config`.
-7. If service images or referenced config files changed, run the narrowest practical startup check, such as `docker compose up -d <service>` followed by `docker compose ps` or logs for that service.
-8. If a service cannot be given a confident limit yet, choose a conservative starting budget and leave a clear TODO in the Compose-adjacent documentation, not in the YAML unless necessary.
-
-## Default Budget Guidance
-
-Use these as starting points, then adjust when real measurements prove they are too small or too large.
-
-| Service type             |           Memory |              CPU |
-| ------------------------ | ---------------: | ---------------: |
-| Small Go service         | `128m` to `256m` | `0.25` to `0.50` |
-| Go ingestion worker      | `256m` to `512m` | `0.50` to `1.00` |
-| Next.js dev server       |   `512m` to `1g` | `0.50` to `1.00` |
-| Postgres source database |   `512m` to `1g` | `0.50` to `1.00` |
-| Postgres exporter        |  `64m` to `128m` | `0.10` to `0.25` |
-| StarRocks                |     `2g` to `4g` | `1.50` to `3.00` |
-| Ollama                   |     `4g` to `8g` | `2.00` to `4.00` |
-| Prometheus               |   `512m` to `1g` | `0.50` to `1.00` |
-| Grafana                  |   `512m` to `1g` | `0.50` to `1.00` |
-
-## DataStack Recommended First Pass
-
-For the first full local demo stack, use a conservative laptop-oriented budget:
-
-| Service                 | `mem_limit` | `cpus` |
-| ----------------------- | ----------: | -----: |
-| `orders-postgres`       |      `768m` | `0.75` |
-| `crm-postgres`          |      `768m` | `0.75` |
-| `inventory-postgres`    |      `768m` | `0.75` |
-| `starrocks`             |        `3g` | `2.00` |
-| `ollama`                |        `6g` | `3.00` |
-| each Postgres exporter  |      `128m` | `0.20` |
-| `prometheus`            |        `1g` | `1.00` |
-| `grafana`               |      `768m` | `0.75` |
-| `scenario-orchestrator` |      `256m` | `0.50` |
-| each simulator service  |      `256m` | `0.50` |
-| `ingestor`              |      `512m` | `1.00` |
-| `backend`               |      `512m` | `1.00` |
-| `web`                   |        `1g` | `1.00` |
-
-Set `memswap_limit` equal to `mem_limit` unless there is a specific reason to permit swap. This keeps runaway services from making the demo machine unusable.
-
-## Compose Pattern
-
-Use this shape for each service:
-
-```yaml
-services:
-  example-service:
-    image: example:latest
-    mem_limit: 256m
-    memswap_limit: 256m
-    cpus: 0.50
-```
-
-If resource values repeat heavily, YAML anchors are allowed, but keep the Compose file easy to read during the demo.
+1. Classify the workload: Go service, database, analytics database, observability component, or load generator.
+2. Start from the table above for similar workloads. Keep requests low, since they only reserve scheduling space on a single node, and set limits to what the workload genuinely needs under k6 load.
+3. Apply the change and check that nothing is OOMKilled or throttled into failing probes: `kubectl --context kind-datastack get pods`, and the RESTARTS column. A restart with reason `OOMKilled` means the memory limit is too low. A liveness-probe kill under load usually means CPU starvation (see the probe timeouts in the go-service chart).
+4. Update the budget table above when a default changes.
 
 ## Review Checklist
 
-Before finishing a Docker Compose task, verify:
-
-- Every service has `mem_limit`.
-- Every service has `memswap_limit`.
-- Every service has `cpus`.
-- Heavy services such as Ollama, ClickHouse, Prometheus, Grafana, and Next.js have realistic local-machine budgets.
-- Optional heavy services are candidates for Compose profiles if the total budget is too high.
-- `docker compose config` succeeds.
-- The final answer reports the resource-budgeting choice and any known tradeoffs.
-
-## When To Ask The User
-
-Ask a clarifying question before assigning final budgets if:
-
-- The target machine memory is unknown and the stack is expected to run all services at once.
-- The user wants production-like load testing rather than a local demo.
-- Ollama model size changes materially.
-- The user wants to run multiple analytical databases at the same time.
-
-If the user does not answer, use the DataStack recommended first pass and mention that the budgets can be tuned after observing Prometheus/Grafana metrics.
+- Every new container has CPU and memory requests and limits.
+- Unused components of third-party charts are disabled.
+- The total of all memory limits still fits comfortably in the Docker Desktop allocation, with StarRocks running.
+- The final answer reports the budget chosen and any trade-offs.

@@ -1,0 +1,58 @@
+# Grafana Tempo, single binary (chart grafana/tempo). Installed by
+# `make observability` as release "tempo", which is also its Service name:
+# OTLP gRPC ingest on tempo:4317 (fed by the collector), query API on
+# tempo:3200 (the chart hard-codes 3200 for the HTTP port).
+#
+# The metrics-generator turns spans into Prometheus series and remote-writes
+# them to prometheus:9090. service-graphs powers Grafana's service map
+# (traces_service_graph_request_total{client,server}); span-metrics gives
+# RED metrics per service and span (traces_spanmetrics_*).
+
+fullnameOverride: tempo
+
+tempo:
+  # The default 1 GB ballast is far too much for a laptop cluster.
+  memBallastSizeMbs: 0
+  reportingEnabled: false
+  retention: 24h
+
+  # Spans arrive over OTLP from the collector. The chart's Jaeger receivers
+  # stay (its port templates require them); nothing sends to them.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://prometheus:9090/api/v1/write
+    registry:
+      external_labels:
+        source: tempo
+    processor:
+      service_graphs:
+        dimensions: []
+        wait: 10s
+      span_metrics:
+        dimensions: []
+
+  # Processors are switched on per tenant through the overrides.
+  overrides:
+    defaults:
+      metrics_generator:
+        processors: [service-graphs, span-metrics]
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 640Mi
+
+# Local storage on the pod (emptyDir). Traces live 24h at most anyway.
+persistence:
+  enabled: false
