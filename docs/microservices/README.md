@@ -175,7 +175,22 @@ CREATE OR REPLACE TRIGGER "<table>_set_updated_at"
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
-### 3.2 Schema ownership and migrations
+### 3.2 Schema documentation (semantic context)
+
+Every table and column is documented **in the GORM model**, because the documentation is how a text-to-SQL analyzer understands the data:
+
+- **Columns:** a `comment:` gorm tag giving the meaning, units (USD, UTC, milliseconds), every enum value with what it means, and what NULL means. The base `database.Model` columns (`id`, `created_at`, `updated_at`, `deleted_at`) are documented once there.
+- **Tables:** a `TableComment() string` method (`database.TableCommenter`). It says what one row is, which service owns the table, how it joins, and how the key metrics are defined (for example "Revenue is the sum of total_amount over orders with status PAID or SHIPPED").
+- **Joins:** a column that references another table ends its comment with `[ref: <table>.<column>]`, using the StarRocks table name, for example `[ref: customers.id]`. That gives a machine-parseable join graph across services that share no foreign keys.
+- **Characters:** comment text must not contain `;` (the gorm tag separator) or a backtick.
+
+The comments flow **model → Postgres** (`AutoMigrate`: `COMMENT ON COLUMN`, and `COMMENT ON TABLE` from `TableComment`) **→ StarRocks** (the CDC daemon creates and reconciles them; see [cdc-sync.md](cdc-sync.md)). The analyzer reads `information_schema` in `analytics_db`.
+
+Enforcement:
+- Each service's `TestSchemaIsFullyDocumented` fails if any table or column in its database lacks a comment (`database.Undocumented`).
+- `make catalog` validates every comment and `[ref: …]` marker across all six databases (a marker must point at a real table and column), then regenerates [data-catalog.md](data-catalog.md), with an ER diagram built from the markers. `make catalog-check` fails if the committed catalog is stale.
+
+### 3.3 Schema ownership and migrations
 
 - Each service owns one logical database. In kind, its Helm release declares that database as a CloudNativePG `Database` resource.
 - **The GORM model is the schema.** Columns, sizes, `NOT NULL`, named CHECKs, partial unique indexes (`uniqueIndex:,where:deleted_at IS NULL`) and composite indexes are all declared in struct tags. There are no migration files.
@@ -183,7 +198,7 @@ CREATE OR REPLACE TRIGGER "<table>_set_updated_at"
 - `AutoMigrate` only adds: new tables, columns, indexes and constraints. It never drops or renames anything. That's fine for a demo. To change a column's shape, recreate the database (drop it, then redeploy).
 - Integration tests run `Migrate` twice to prove it's idempotent.
 
-### 3.3 HTTP API conventions
+### 3.4 HTTP API conventions
 
 - REST over JSON with **gin**. Requests are validated with gin binding tags (go-playground/validator), and invalid input gets `400 INVALID_REQUEST`.
 - Error body: `{"error": "<MACHINE_CODE>", "message": "<human text>"}` (`httpserver.RespondError`). Machine codes such as `OUT_OF_STOCK` and `PAYMENT_DECLINED` are what the Order Service records as `failure_reason`. 500s never leak internals.
@@ -194,13 +209,13 @@ CREATE OR REPLACE TRIGGER "<table>_set_updated_at"
 - Service-to-service URLs come from environment variables populated by ConfigMaps (for example `PAYMENT_URL=http://payment-service:8084`).
 - Outbound HTTP clients use explicit timeouts. No call waits forever.
 
-### 3.4 Configuration
+### 3.5 Configuration
 
 - **cobra** commands: `serve`, `migrate`.
 - **viper** binds every flag to an environment variable of the same name: `--database-url` ↔ `DATABASE_URL`, `--tier-weights` ↔ `TIER_WEIGHTS`. Flag defaults are the documented defaults.
 - In Kubernetes, plain settings go in the chart's ConfigMap. Database credentials come from CNPG's secret as `PGUSER`/`PGPASSWORD`, which pgx reads natively, so passwords never appear in URLs.
 
-### 3.5 Go layout
+### 3.6 Go layout
 
 One Go module at the repo root (`github.com/poph2/datastack`) and one shared `Dockerfile` (`--build-arg SERVICE=<name>`, distroless, non-root).
 
@@ -214,6 +229,7 @@ pkgs/                       # shared by every service
   telemetry/   OTel tracer provider + W3C propagator
   httpclient/  service-to-service JSON client (otelhttp, per-peer timeout, *APIError with the peer's error code, client metrics)
   pgtest/      testcontainers Postgres for integration tests
+tools/catalog/   generates and validates docs/microservices/data-catalog.md from the documented schemas
 services/<name>/
   main.go      root command: serve + migrate
   serve.go     wiring: logger, tracing, DB, handler, router, run
@@ -244,7 +260,7 @@ More patterns, established by the Inventory Service:
 - **Seed data is loaded by `Migrate`** (`seed.go`): deterministic, and inserted only when the table has never held rows (soft-deleted ones count), so it runs in the existing initContainer, never re-seeds, and every environment has the same IDs.
 - **Domain metrics** live in the domain package's `metrics.go` (`<service>_<thing>_total`, low-cardinality labels such as `outcome`). The shared HTTP metrics count requests; domain metrics count what happened to the business.
 
-### 3.6 Testing
+### 3.7 Testing
 
 - Handler tests go through the real shared router (`httpserver.NewRouter`) with a fake `Store`.
 - Repository tests run the service's real `Migrate` against Postgres in testcontainers (`pkgs/pgtest`) and assert the schema behaviour: triggers, constraints, soft delete.
@@ -375,7 +391,7 @@ The gaps between the original spec and the per-service narratives, and how they 
 5. **SHIPPED semantics:** an order becomes `SHIPPED` when the Shipment Service accepts the request. The box physically ships later (`shipments.shipped_at`), so time-to-ship analytics use `shipments`, not `orders`.
 6. **Campaign join key:** `attributions` stores `utm_source` and `utm_campaign`, and only known campaigns are accepted, so ROAS joins work per campaign.
 7. **Shipment destination:** `shipments.destination_country` is stored. The Order Service also passes `loyalty_tier`, so GOLD customers' boxes are packed faster (VIP SLA dashboards).
-8. **Money:** `shopspring/decimal`, sent as fixed two-decimal strings (§3.3).
+8. **Money:** `shopspring/decimal`, sent as fixed two-decimal strings (§3.4).
 9. **Double charges:** a partial unique index lets an order have at most one successful payment (`409 ALREADY_PAID`).
 10. **Shipment packing:** a database-driven worker (`FOR UPDATE SKIP LOCKED`, capacity per tick), not an in-memory queue, so it is safe with several replicas and survives restarts.
 11. **CDC state:** no watermark file. Cursors are re-derived from StarRocks at startup, and loads are idempotent upserts (see [cdc-sync.md](cdc-sync.md)).

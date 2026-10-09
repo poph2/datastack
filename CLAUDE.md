@@ -42,7 +42,8 @@ pkgs/                 shared Go packages: cli, database (GORM, base Model, AutoM
                       httpserver (gin router, errors, metrics), httpclient (service-to-service),
                       logging, telemetry, pgtest (testcontainers Postgres)
 services/<name>/      one binary per service: main.go, serve.go, internal/<domain>/
-services/cdc-sync/    the Postgres → StarRocks sync daemon
+services/cdc-sync/    the Postgres → StarRocks sync daemon (also carries table/column comments)
+tools/catalog/        generates docs/microservices/data-catalog.md from the documented schemas
 deploy/charts/go-service/  ONE generic Helm chart for every Go service
 deploy/values/        per-service values for that chart
 deploy/infra/         CNPG Postgres cluster, StarRocks
@@ -77,6 +78,7 @@ Local development without kind: `make up` (Postgres in Docker Compose), then `ma
 - **Follow the conventions in docs/microservices/README.md §3.** In short:
   - **Schema:** the GORM model is the schema (`AutoMigrate`, named CHECKs, partial unique indexes on `deleted_at IS NULL`). Embed `database.Model`. Postgres is the only clock for `created_at`/`updated_at`. Soft deletes only.
   - **Concurrency:** use guarded SQL (`UPDATE ... WHERE <guard> RETURNING`), not locks or read-then-write. That covers stock, state transitions and conversions.
+  - **Documentation:** every column has a `comment:` gorm tag and every model a `TableComment()`, both written for a text-to-SQL analyzer: meaning, units, enum values, NULL meaning, and `[ref: table.column]` on every reference column. After changing a model, run `make catalog` and commit the regenerated `docs/microservices/data-catalog.md`. See docs/microservices/README.md §3.2.
   - **Money:** `shopspring/decimal`, serialised as fixed two-decimal strings. Never `float64`.
   - **HTTP:** `400` means bad input, `404` an unknown entity, `409` a conflict with current state. Errors use the shared `{"error": CODE, "message"}` body. Business failures are data (4xx), not 5xx.
   - **Calls between services:** use `pkgs/httpclient` with a per-peer timeout. Never retry anything that isn't idempotent.
@@ -94,6 +96,7 @@ Local development without kind: `make up` (Postgres in Docker Compose), then `ma
 
 - [docs/microservices/README.md](docs/microservices/README.md): topology, call graph, the checkout journey, shared conventions (§3), telemetry, analytics pipeline, deployment, design decisions.
 - `docs/microservices/<service>-service.md`: each service's data model, API contract, configuration, metrics, and analytics impact.
+- [docs/microservices/data-catalog.md](docs/microservices/data-catalog.md): generated data catalog. Every table and column, the join graph, and exactly what the analyzer sees.
 - [docs/microservices/cdc-sync.md](docs/microservices/cdc-sync.md): the CDC daemon (stateless cursors, schema reflection, Stream Load semantics).
 
 ## Not in Scope
