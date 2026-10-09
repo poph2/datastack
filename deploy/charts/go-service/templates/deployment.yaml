@@ -1,8 +1,8 @@
 {{- if not .Values.image.repository }}
 {{- fail "image.repository is required" }}
 {{- end }}
-{{- if not .Values.postgres.database }}
-{{- fail "postgres.database is required" }}
+{{- if and .Values.migrations.enabled (not .Values.postgres.database) }}
+{{- fail "postgres.database is required when migrations are enabled" }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -12,6 +12,10 @@ metadata:
     {{- include "go-service.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "go-service.selectorLabels" . | nindent 6 }}
@@ -58,16 +62,22 @@ spec:
                 name: {{ include "go-service.name" . }}
           env:
             {{- include "go-service.databaseEnv" . | nindent 12 }}
+          # Lenient timeouts: on a laptop, image builds and k6 can starve the
+          # kind node of CPU for a few seconds, and a 1s probe timeout then
+          # restarts healthy pods.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
           lifecycle:
             preStop:
               sleep:

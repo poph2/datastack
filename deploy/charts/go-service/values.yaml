@@ -10,6 +10,11 @@ image:
 
 replicaCount: 1
 
+# Deployment update strategy. Empty uses the Kubernetes default
+# (RollingUpdate). A singleton such as the CDC sync daemon sets
+# {type: Recreate}, so two copies never run at once during a rollout.
+strategy: {}
+
 # Port the HTTP API listens on. Passed to the binary as HTTP_ADDR.
 port: 8080
 
@@ -25,7 +30,9 @@ postgres:
   cluster: datastack-pg
   # Logical database owned by this service. The chart creates it with a CNPG
   # Database resource, and the service creates its tables itself through
-  # `migrate` (GORM AutoMigrate).
+  # `migrate` (GORM AutoMigrate). Leave empty for a service that owns no
+  # database (and set migrations.enabled: false). It still gets PGUSER and
+  # PGPASSWORD, so it can read other databases (the CDC sync daemon does).
   database: ""
   owner: app
   # Secret CNPG generates for the owner role (keys: username, password).

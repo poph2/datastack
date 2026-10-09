@@ -1,0 +1,24 @@
+# Order Service. Deployed as release "order-service", which is also its
+# in-cluster DNS name: http://order-service:8080. It is the edge API that k6
+# calls, and it calls every other service.
+image:
+  repository: datastack/order
+
+port: 8080
+
+postgres:
+  database: orders
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  CUSTOMER_URL: http://customer-service:8081
+  MARKETING_URL: http://marketing-service:8082
+  INVENTORY_URL: http://inventory-service:8083
+  PAYMENT_URL: http://payment-service:8084
+  SHIPMENT_URL: http://shipment-service:8085
+  CRITICAL_TIMEOUT: 2s
+  MARKETING_TIMEOUT: 500ms
+  SHIPMENT_TIMEOUT: 1s
+  RECONCILE_INTERVAL: 30s
+  RECONCILE_AFTER: 30s

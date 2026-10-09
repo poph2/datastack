@@ -1,0 +1,17 @@
+# Payment Service. Deployed as release "payment-service", which is also its
+# in-cluster DNS name: http://payment-service:8084
+image:
+  repository: datastack/payment
+
+port: 8084
+
+postgres:
+  database: payments
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  FAILURE_RATE: "0.05"
+  LATENCY_MIN: 20ms
+  LATENCY_MAX: 150ms
+  METHOD_WEIGHTS: CREDIT_CARD=75,PAYPAL=25

@@ -1,0 +1,13 @@
+# Marketing Service. Deployed as release "marketing-service", which is also its
+# in-cluster DNS name: http://marketing-service:8082
+image:
+  repository: datastack/marketing
+
+port: 8082
+
+postgres:
+  database: marketing
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json

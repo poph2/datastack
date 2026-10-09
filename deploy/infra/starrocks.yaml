@@ -1,0 +1,109 @@
+# StarRocks for the analytics layer: one all-in-one pod (FE and BE in a
+# single container), sized for a laptop kind cluster. The CDC sync daemon
+# creates analytics_db and its tables itself, so nothing else is needed.
+#
+#   kubectl --context kind-datastack apply -f deploy/infra/starrocks.yaml
+#
+# Ports on Service "starrocks":
+#   8030  FE HTTP (web UI, /api/health)
+#   9030  FE MySQL protocol (DDL, Grafana datasource, mysql client)
+#   8040  BE HTTP (Stream Load target; the FE would redirect here anyway,
+#         but to an address that is 127.0.0.1 inside this pod)
+#
+# The user is root with no password. Fine for a local demo, nothing more.
+apiVersion: v1
+kind: Service
+metadata:
+  name: starrocks
+  labels:
+    app.kubernetes.io/name: starrocks
+    app.kubernetes.io/part-of: datastack
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: starrocks
+  ports:
+    - name: fe-http
+      port: 8030
+      targetPort: fe-http
+    - name: fe-mysql
+      port: 9030
+      targetPort: fe-mysql
+    - name: be-http
+      port: 8040
+      targetPort: be-http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: starrocks
+  labels:
+    app.kubernetes.io/name: starrocks
+    app.kubernetes.io/part-of: datastack
+spec:
+  serviceName: starrocks
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: starrocks
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: starrocks
+        app.kubernetes.io/part-of: datastack
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: starrocks
+          image: starrocks/allin1-ubuntu:3.3-latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: fe-http
+              containerPort: 8030
+            - name: fe-mysql
+              containerPort: 9030
+            - name: be-http
+              containerPort: 8040
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          # FE and BE take about a minute to come up and register with each
+          # other; allow up to 5 minutes before the kubelet gives up.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: fe-http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: fe-http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: fe-mysql
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            # The all-in-one image keeps FE metadata and BE tablets under
+            # these directories.
+            - name: data
+              mountPath: /data/deploy/starrocks/fe/meta
+              subPath: fe-meta
+            - name: data
+              mountPath: /data/deploy/starrocks/be/storage
+              subPath: be-storage
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

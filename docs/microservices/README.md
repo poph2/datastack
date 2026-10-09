@@ -4,7 +4,7 @@ This is the architecture of DataStack's e-commerce microservice ecosystem. It re
 
 The ecosystem has six Go HTTP microservices and a Go CDC sync daemon. It runs on a local Kubernetes (kind) cluster. k6 generates the traffic, OpenTelemetry emits distributed traces, and the sync daemon streams operational data into StarRocks for real-time Grafana dashboards.
 
-> **Status:** being built one service at a time. Built so far: **Customer Service** ([`services/customer`](../../services/customer)), the reference implementation for the conventions in §3, and **Inventory Service** ([`services/inventory`](../../services/inventory)).
+> **Status:** all six microservices, the CDC sync daemon and the k6 load generator are built. The Customer Service ([`services/customer`](../../services/customer)) is the reference implementation for the conventions in §3.
 
 ## Service Index
 
@@ -212,6 +212,7 @@ pkgs/                       # shared by every service
   httpserver/  gin router (otelgin, slog-gin, Prometheus, recovery, probes), error helpers, graceful shutdown
   logging/     slog JSON/text setup
   telemetry/   OTel tracer provider + W3C propagator
+  httpclient/  service-to-service JSON client (otelhttp, per-peer timeout, *APIError with the peer's error code, client metrics)
   pgtest/      testcontainers Postgres for integration tests
 services/<name>/
   main.go      root command: serve + migrate
@@ -229,6 +230,12 @@ deploy/
 ```
 
 A service adds a service layer between handler and repository only when it has real business logic. The Order Service's orchestration will have one; the Customer Service doesn't need one.
+
+More patterns, established by the Order Service:
+
+- **Calling another service** goes through `pkgs/httpclient`, wrapped in a small typed client per peer (`clients.go`) that turns the peer's error codes into sentinel errors. Requests are built from the inbound context (one trace per checkout), every peer has its own timeout, and nothing retries automatically: a retry is only safe when the peer makes the operation idempotent (shipment create, attribution conversion).
+- **State machines move through guarded transitions:** `UPDATE ... WHERE id = ? AND status = <from> RETURNING *`. A lost race returns `ErrStatusChanged` rather than overwriting.
+- **Business failures are data, not errors.** A failed checkout is a FAILED row with a reason, and a 4xx with the shared error body plus the entity. Only infrastructure failures are 5xx.
 
 More patterns, established by the Inventory Service:
 
@@ -263,7 +270,7 @@ The collector forwards to Tempo, and Grafana uses Tempo as a datasource. In Temp
 
 ## 5. Analytics Pipeline
 
-The CDC Sync App runs one polling loop per table, every 5 seconds. Each loop reads rows whose `updated_at` is newer than its watermark (oldest first, batches of up to 1000) and pushes the batch into StarRocks `analytics_db` with HTTP Stream Load. When StarRocks confirms the load, the loop advances the watermark in `watermarks.json`. Full details are in [cdc-sync.md](cdc-sync.md).
+The CDC Sync App ([`services/cdc-sync`](../../services/cdc-sync)) runs one polling loop per table, every 5 seconds. Each loop reads rows past its `(updated_at, id)` cursor (oldest first, batches of up to 1000, soft-deleted rows included) and pushes the batch into StarRocks `analytics_db` with HTTP Stream Load, straight to the BE. When StarRocks confirms the load, the loop advances its cursor in memory. There is no watermark file: at startup the cursors are re-derived from `MAX(updated_at)` in StarRocks, and loads are idempotent Primary Key upserts. Target tables are created and extended by reflecting the Postgres schema. `GET :8090/status` shows each table's cursor and lag. Full details are in [cdc-sync.md](cdc-sync.md).
 
 Tables synced (seven tables across six databases):
 
@@ -297,39 +304,50 @@ Tables synced (seven tables across six databases):
 | PostgreSQL | CloudNativePG operator (`cnpg/cloudnative-pg`) running one `Cluster` (`deploy/infra/postgres.yaml`). Each service's chart release declares its own logical database. Bitnami's chart was dropped because its free images were discontinued in 2025 |
 | Traces | `open-telemetry/opentelemetry-collector`, `grafana/tempo` |
 | Dashboards | `grafana/grafana`, with Tempo and StarRocks (MySQL protocol, FE port 9030) datasources provisioned |
-| Analytics | `starrocks/starrocks` (kube-starrocks), overridden to 1 FE + 1 BE with 2 GB memory limits |
-| CDC Sync App | One Deployment with a single replica (the watermark file must have a single writer), plus a small PVC for `watermarks.json` |
+| Analytics | StarRocks as one all-in-one pod (`starrocks/allin1-ubuntu`, FE and BE together, 3 GB limit), a StatefulSet plus Service `starrocks` in `deploy/infra/starrocks.yaml` (`make analytics`) |
+| CDC Sync App | The go-service chart with no database of its own and no migrate step, single replica, `Recreate` strategy (`deploy/values/cdc-sync.yaml`). It's stateless, so no PVC |
 | Load | k6 as a continuous Deployment (steady demo traffic) or a CronJob (bursts) |
 
 Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
 
 ```sh
-make kind-up            # create the kind cluster
-make infra              # CNPG operator + Postgres cluster
-make deploy-customer    # build image, kind load, helm upgrade --install customer-service
-make forward-customer   # port-forward localhost:8081
-make up && make run-customer   # or: local Postgres via docker compose + go run
+make kind-up                 # create the kind cluster
+make infra                   # CNPG operator + Postgres cluster
+make analytics               # StarRocks (one all-in-one pod, ~3 GB)
+make deploy-all              # build, kind load and helm install every service + the CDC daemon
+make deploy-order            # ...or one service at a time
+make load RATE=10            # continuous k6 journeys inside the cluster; make load-stop to end
+make forward-order           # port-forward localhost:8080 (any service: forward-<name>)
+make status                  # pods and CNPG databases
+make up && make run-customer # local alternative: Postgres via docker compose + go run
 ```
 
-Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `otel-collector`, `starrocks-fe`.
+Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `starrocks`, `datastack-pg-rw`.
 
 ### Load generator (k6)
 
-The k6 script loops through these weighted actions:
+[`deploy/k6/checkout-journey.js`](../../deploy/k6/checkout-journey.js) runs as a `k6` Deployment (`grafana/k6:1.3.0`, script mounted from a ConfigMap) at a constant arrival rate (`RATE` journeys per second). It runs for 24h, and Kubernetes restarts it, so the load is effectively endless. Each journey:
 
-1. Register a new customer (`POST /customers`), or pick a known user ID from earlier iterations.
-2. Log an ad click (`POST /attributions`) with a random `utm_source` from the seeded campaigns.
-3. Check out (`POST /orders/checkout`) with a random `product_id` from the seeded catalog, carrying the `attribution_id` forward. A configurable fraction of checkouts send no attribution, to simulate organic traffic.
+1. Registers a new customer (30%, with a weighted country), or reuses one this VU created earlier.
+2. Clicks an ad (`POST /attributions`, weighted across the seeded paid campaigns), or arrives organically (15%) with no attribution.
+3. Checks out a product picked with a **popularity skew** (low-numbered SKUs sell far more often, so stock-outs concentrate on them), quantity 1–3.
+4. Occasionally upgrades a customer's tier or suspends them (1%), or triggers a manual restock burst (0.5%).
 
-## 7. Open Design Questions
+Setup reads the catalog (`GET /inventory`) and campaigns (`GET /campaigns`) from the services, so the script never hard-codes IDs. Checks treat `201` and `422` as expected outcomes. The threshold is a server-error rate below 1%.
 
-These are gaps between the original spec and the per-service narratives. Each service doc proposes a resolution, and they are collected here so they can be decided once:
+## 7. Design Decisions
 
-1. **Account state column.** The Customer Service must reject suspended users, but `customers` has no status column. Proposed: add `status`. See [customer-service.md](customer-service.md).
-2. **Order line data.** "Who bought what" and the lost-revenue dashboard need `product_id` and `quantity` on `orders`, and the failure dashboards need `failure_reason`. Proposed: add all three. See [order-service.md](order-service.md).
-3. **Pricing source.** The checkout payload carries no amount. Proposed: `POST /inventory/reserve` returns `unit_price`, and the Order Service computes `total_amount`.
-4. **Inventory release.** The checkout flow releases stock on payment failure, but no endpoint was specified. Proposed: `POST /inventory/release`.
-5. **SHIPPED semantics.** The Order Service marks the order `SHIPPED` as soon as the Shipment Service accepts the request, while the shipment itself is still `PENDING`. This keeps orders simple, but it means "shipped" in `orders` means "handed to fulfillment"; use `shipments` for the actual ship time. An alternative is a `FULFILLING` order status.
-6. **Campaign join key.** `attributions` stores only `utm_source`, while `campaigns` is keyed by `utm_source` + `utm_campaign`. ROAS per campaign needs `utm_campaign` on `attributions` as well.
-7. **Shipment destination.** `POST /shipments/create` receives `destination_country`, but `shipments` doesn't store it. Proposed: add the column.
-8. **Runtime target.** `CLAUDE.md` still describes Docker Compose, NATS, ClickHouse, and Prometheus. This design uses kind, synchronous HTTP, StarRocks, and OTel/Tempo. `CLAUDE.md` should be updated to match once this design is accepted.
+The gaps between the original spec and the per-service narratives, and how they were resolved:
+
+1. **Account state:** `customers.status` (`ACTIVE`, `SUSPENDED`, `PENDING_DELETION`). The Order Service rejects anything not `ACTIVE`.
+2. **Order line data:** `orders` has `product_id`, `quantity`, `unit_price`, `failure_reason`.
+3. **Pricing source:** `POST /inventory/reserve` returns `unit_price`, and the Order Service computes `total_amount`.
+4. **Inventory release:** `POST /inventory/release`, called when payment fails after a reservation.
+5. **SHIPPED semantics:** an order becomes `SHIPPED` when the Shipment Service accepts the request. The box physically ships later (`shipments.shipped_at`), so time-to-ship analytics use `shipments`, not `orders`.
+6. **Campaign join key:** `attributions` stores `utm_source` and `utm_campaign`, and only known campaigns are accepted, so ROAS joins work per campaign.
+7. **Shipment destination:** `shipments.destination_country` is stored. The Order Service also passes `loyalty_tier`, so GOLD customers' boxes are packed faster (VIP SLA dashboards).
+8. **Money:** `shopspring/decimal`, sent as fixed two-decimal strings (§3.3).
+9. **Double charges:** a partial unique index lets an order have at most one successful payment (`409 ALREADY_PAID`).
+10. **Shipment packing:** a database-driven worker (`FOR UPDATE SKIP LOCKED`, capacity per tick), not an in-memory queue, so it is safe with several replicas and survives restarts.
+11. **CDC state:** no watermark file. Cursors are re-derived from StarRocks at startup, and loads are idempotent upserts (see [cdc-sync.md](cdc-sync.md)).
+12. **Runtime target:** `CLAUDE.md` still describes Docker Compose, NATS, ClickHouse, and Prometheus. This design uses kind, synchronous HTTP, StarRocks, and OTel/Tempo, so `CLAUDE.md` should be updated to match.

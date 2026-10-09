@@ -1,0 +1,18 @@
+# Shipment Service. Deployed as release "shipment-service", which is also its
+# in-cluster DNS name: http://shipment-service:8085
+image:
+  repository: datastack/shipment
+
+port: 8085
+
+postgres:
+  database: shipments
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  PACKING_DELAY_MIN: 2s
+  PACKING_DELAY_MAX: 30s
+  GOLD_DELAY_FACTOR: "0.5"
+  SHIP_INTERVAL: 1s
+  SHIP_CAPACITY: "10"

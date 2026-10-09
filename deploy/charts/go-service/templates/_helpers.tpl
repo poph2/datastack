@@ -30,8 +30,10 @@ out of the URL, so they never need escaping.
     secretKeyRef:
       name: {{ .Values.postgres.credentialsSecret }}
       key: password
+{{- if .Values.postgres.database }}
 - name: DATABASE_URL
   value: "postgres://{{ .Values.postgres.cluster }}-rw:5432/{{ .Values.postgres.database }}?sslmode={{ .Values.postgres.sslmode }}"
+{{- end }}
 {{- end -}}
 
 {{- define "go-service.containerSecurityContext" -}}

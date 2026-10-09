@@ -1,9 +1,12 @@
 # Order Service: Checkout Orchestrator
 
+> **Status: built.** Code is in [`services/order`](../../services/order). It's the only service that calls others, and it introduced the shared service-to-service client ([`pkgs/httpclient`](../../pkgs/httpclient)).
+
 | | |
 |---|---|
 | Port | `8080` |
 | Kubernetes service | `order-service` |
+| Binary | `order` (`serve`, `migrate`) |
 | Database | `orders` |
 | Tables | `orders` |
 | Called by | k6 (the edge API) |
@@ -11,94 +14,80 @@
 
 ## Purpose
 
-The Order Service is the central nervous system of the ecosystem. Every other service cares only about its own domain. The Order Service conducts the checkout so that the pieces come together into one coherent transaction: no charging for stock that doesn't exist, and no shipping when the payment was declined.
-
-In the Tempo service graph it is the large hub node, with edges to every other service.
+The Order Service is the central nervous system of the ecosystem. Every other service cares only about its own domain. The Order Service conducts the checkout so that the pieces come together into one coherent transaction: no charging for stock that doesn't exist, and no shipping when the payment was declined. In the Tempo service graph it's the hub, with edges to every other service.
 
 ## Responsibilities
 
-- **Transaction state.** Creates the order and tracks its lifecycle: `PENDING` → `PAID` → `SHIPPED`, or `FAILED` at any step.
-- **Distributed orchestration.** Runs the checkout as an ordered sequence of synchronous calls, with compensation when a step fails.
-- **Financial record.** Holds the top-line facts: who bought what, when, and for exactly how much (GMV). It also records *why* a failed order failed.
+- **Transaction state.** Records every checkout attempt and tracks its lifecycle: `PENDING` → `PAID` → `SHIPPED`, or `FAILED` at any step.
+- **Distributed orchestration.** Runs the checkout as an ordered sequence of synchronous calls, releasing reserved stock when payment fails.
+- **Financial record.** Who bought what, when, and for exactly how much (GMV). It also records *why* a failed order failed.
+- **Recovery.** A background reconciler finishes orders that were paid but whose shipment request didn't go through.
 
 ## Data Model
 
-Schema as specified:
+The schema is the GORM model in [`internal/order/model.go`](../../services/order/internal/order/model.go), applied by `order migrate`:
 
-```sql
-CREATE TABLE orders (
-    id SERIAL PRIMARY KEY,
-    user_id INT,
-    attribution_id INT,
-    total_amount DECIMAL(10,2),
-    status VARCHAR(20), -- PENDING, PAID, FAILED, SHIPPED
-    is_deleted BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TRIGGER orders_set_updated_at
-  BEFORE UPDATE ON orders
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+```go
+type Order struct {
+	database.Model // id, created_at/updated_at (DB clock), deleted_at, (updated_at, id) index
+	UserID        uint64  `gorm:"not null"`
+	AttributionID *uint64 // nil for organic traffic
+	ProductID     string  `gorm:"size:50;not null"`
+	Quantity      int     `gorm:"not null;check:chk_orders_quantity,quantity >= 1"`
+	UnitPrice     *decimal.Decimal `gorm:"type:decimal(10,2)"` // set once inventory reserves
+	TotalAmount   *decimal.Decimal `gorm:"type:decimal(10,2)"`
+	Status        Status          `gorm:"size:20;not null;index;check:chk_orders_status,..."`
+	FailureReason *FailureReason  `gorm:"size:50;check:chk_orders_failure_reason,..."`
+}
 ```
 
-### Proposed additions
+Changes from the original spec: `product_id`, `quantity`, `unit_price` and `failure_reason` were added (they were the proposed additions), and the shared conventions apply. `user_id` and `attribution_id` are logical references to other services' databases, not foreign keys.
 
-The narrative ("who bought **what**", "records exactly **why** an order failed", lost-revenue joins with inventory) needs columns the base schema lacks:
-
-```sql
-ALTER TABLE orders ADD COLUMN product_id VARCHAR(50);
-ALTER TABLE orders ADD COLUMN quantity INT NOT NULL DEFAULT 1;
-ALTER TABLE orders ADD COLUMN unit_price DECIMAL(10,2);
-ALTER TABLE orders ADD COLUMN failure_reason VARCHAR(50); -- CUSTOMER_INVALID, CUSTOMER_SUSPENDED, OUT_OF_STOCK, PRODUCT_NOT_FOUND, PAYMENT_DECLINED, UPSTREAM_ERROR
-```
-
-`user_id` and `attribution_id` are logical references into other services' databases. They are not foreign keys.
+**Failure reasons** are the peers' own error codes: `CUSTOMER_INVALID`, `CUSTOMER_SUSPENDED`, `OUT_OF_STOCK`, `PRODUCT_NOT_FOUND`, `PAYMENT_DECLINED`, `UPSTREAM_ERROR`.
 
 ### Status lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> PENDING: order row inserted
-  PENDING --> FAILED: customer invalid / out of stock / payment declined / upstream error
+  PENDING --> FAILED: customer invalid / suspended, out of stock, payment declined, upstream error
   PENDING --> PAID: payment SUCCESS
-  PAID --> SHIPPED: shipment accepted
+  PAID --> SHIPPED: shipment accepted (checkout, or the reconciler later)
   FAILED --> [*]
   SHIPPED --> [*]
 ```
 
-Every transition is an `UPDATE`, so it bumps `updated_at`. That means the CDC sync sees every state change, not just the final one. When traffic is fast, though, intermediate states may be overwritten between polls; see [cdc-sync.md](cdc-sync.md).
+Every transition is one **guarded UPDATE** (`Repository.Apply`: `WHERE id = ? AND status = <from> RETURNING *`), so the checkout and the reconciler (or two replicas) can never both move the same order. A test races 20 goroutines on one transition and exactly one wins.
 
 ## API
 
 ### `POST /orders/checkout`
 
-Request:
-
 ```json
-{ "user_id": 1, "product_id": "PROD_A", "attribution_id": 99, "quantity": 1 }
+{ "user_id": 1, "product_id": "PROD_0001", "attribution_id": 99, "quantity": 1 }
 ```
 
-- `user_id` and `product_id` are required.
-- `attribution_id` is optional. Organic traffic has none.
-- `quantity` is optional and defaults to `1`.
-
-Responses:
+`user_id` and `product_id` are required. `attribution_id` is optional (organic traffic has none). `quantity` is optional, defaults to 1, max 100.
 
 | Status | Body |
 |---|---|
-| `201 Created` | `{"order_id": 999, "status": "SHIPPED", "total_amount": 49.99, "tracking_number": "1Z..."}` |
-| `422 Unprocessable Entity` | `{"order_id": 999, "status": "FAILED", "error": "OUT_OF_STOCK"}`. Also used for `CUSTOMER_INVALID`, `CUSTOMER_SUSPENDED`, `PRODUCT_NOT_FOUND`, `PAYMENT_DECLINED` |
-| `502 Bad Gateway` | `{"order_id": 999, "status": "FAILED", "error": "UPSTREAM_ERROR"}`: a critical dependency was unreachable or timed out |
-| `400 Bad Request` | `{"error": "INVALID_REQUEST"}`: malformed payload; no order row is created |
+| `201 Created` | The order, `status` `SHIPPED`, with `tracking_number`. Also `201` with `status` `PAID` if the shipment request failed; the reconciler finishes it |
+| `422 Unprocessable Entity` | Business failure: `{"error": "OUT_OF_STOCK", "message": "...", "order": {...FAILED order...}}`. Same for `CUSTOMER_INVALID`, `CUSTOMER_SUSPENDED`, `PRODUCT_NOT_FOUND`, `PAYMENT_DECLINED` |
+| `502 Bad Gateway` | `UPSTREAM_ERROR`: a critical dependency was unreachable, timed out, or answered unexpectedly. Same body shape |
+| `400 Bad Request` | `INVALID_REQUEST`. No order is created |
+| `500` | The Order Service's own database failed |
 
-Business failures are not server errors. Returning `422` keeps k6's HTTP error rate meaningful: only `5xx` means "the system is broken".
+Business failures are deliberately not 5xx, so k6's server-error rate means "the system is broken", not "a card was declined". The failure body carries the FAILED order, so callers still learn its ID.
+
+Order response fields: `order_id`, `user_id`, `attribution_id`, `product_id`, `quantity`, `unit_price`, `total_amount` (money as fixed two-decimal strings, `null` until priced), `status`, `failure_reason`, `tracking_number` (checkout only), `created_at`, `updated_at`.
 
 ### `GET /orders/{id}`
 
-Returns the order row. Useful for debugging and demo drill-down.
+`200` with the order, or `404 ORDER_NOT_FOUND`.
 
 ## Orchestration Flow
+
+[`checkout.go`](../../services/order/internal/order/checkout.go):
 
 ```mermaid
 sequenceDiagram
@@ -114,90 +103,110 @@ sequenceDiagram
   k6->>O: POST /orders/checkout
   O->>O: INSERT order (PENDING)
   O->>C: GET /customers/{user_id}
-  alt 404 or status != ACTIVE
-    O->>O: FAILED (CUSTOMER_INVALID / CUSTOMER_SUSPENDED)
-    O-->>k6: 422
+  alt 404 / not ACTIVE / unreachable
+    O->>O: FAILED (CUSTOMER_INVALID / CUSTOMER_SUSPENDED / UPSTREAM_ERROR)
+    O-->>k6: 422 / 502
   end
-  O->>I: POST /inventory/reserve {product_id, quantity}
+  O->>I: POST /inventory/reserve
   alt 409 / 404
     O->>O: FAILED (OUT_OF_STOCK / PRODUCT_NOT_FOUND)
     O-->>k6: 422
   end
   O->>O: set unit_price, total_amount
   O->>P: POST /payments/process {order_id, amount}
-  alt declined or error
+  alt 402 / error
     O->>I: POST /inventory/release (compensate)
-    O->>O: FAILED (PAYMENT_DECLINED)
-    O-->>k6: 422
+    O->>O: FAILED (PAYMENT_DECLINED / UPSTREAM_ERROR)
+    O-->>k6: 422 / 502
   end
   O->>O: PAID
-  opt attribution_id present (best-effort)
+  opt attribution_id present (best effort)
     O->>M: PUT /attributions/{id}/order {order_id, order_amount}
   end
-  O->>S: POST /shipments/create {order_id, destination_country}
+  O->>S: POST /shipments/create {order_id, destination_country, loyalty_tier}
   S-->>O: 202 (PENDING)
   O->>O: SHIPPED
   O-->>k6: 201
 ```
-
-Step by step:
-
-1. **Create the order.** `INSERT` with `status = 'PENDING'`, `user_id`, `attribution_id`, `product_id`, `quantity`. The `order_id` must exist before payment, and inserting first means *every* checkout attempt is recorded, including ones rejected at step 2. This is what makes the checkout success rate and failure reason breakdown accurate.
-2. **Validate the customer.** `GET /customers/{user_id}`. A `404` gives `FAILED`/`CUSTOMER_INVALID`. A `status` other than `ACTIVE` gives `FAILED`/`CUSTOMER_SUSPENDED`. Keep `country` for step 6.
-3. **Reserve inventory.** `POST /inventory/reserve`. `OUT_OF_STOCK` or `PRODUCT_NOT_FOUND` gives `FAILED`. The money is never touched. On success, store `unit_price` and `total_amount = unit_price × quantity`.
-4. **Charge payment.** `POST /payments/process` with `order_id` and `total_amount`. Any non-`200` response, timeout, or transport error is a failure: call `POST /inventory/release` to compensate, then mark `FAILED`/`PAYMENT_DECLINED` (or `UPSTREAM_ERROR` for a transport error). On success, mark `PAID`.
-5. **Report the conversion (best-effort).** If `attribution_id` is set, call `PUT /attributions/{id}/order`. Log failures and record them on the span, but **don't** fail the order: marketing isn't in the critical path.
-6. **Trigger fulfillment.** `POST /shipments/create` with `destination_country` from step 2. The Shipment Service answers `202` straight away.
-7. **Mark the order shipped.** `UPDATE status = 'SHIPPED'` and return `201` to k6.
 
 ### Failure semantics
 
 | Failure point | Order status | `failure_reason` | Compensation |
 |---|---|---|---|
 | Customer 404 | `FAILED` | `CUSTOMER_INVALID` | none |
-| Customer not ACTIVE | `FAILED` | `CUSTOMER_SUSPENDED` | none |
-| Inventory 409 | `FAILED` | `OUT_OF_STOCK` | none |
-| Inventory 404 | `FAILED` | `PRODUCT_NOT_FOUND` | none |
-| Payment 402 | `FAILED` | `PAYMENT_DECLINED` | release inventory |
-| Customer/Inventory/Payment unreachable | `FAILED` | `UPSTREAM_ERROR` | release inventory if it was reserved |
-| Marketing fails | unaffected | n/a | none; attribution stays unconverted |
-| Shipment fails | stays `PAID` | n/a | none; a reconciler can retry `PAID` orders older than N seconds |
+| Customer not `ACTIVE` | `FAILED` | `CUSTOMER_SUSPENDED` | none |
+| Inventory 409 / 404 | `FAILED` | `OUT_OF_STOCK` / `PRODUCT_NOT_FOUND` | none |
+| Payment 402 | `FAILED` | `PAYMENT_DECLINED` | release stock |
+| Payment `409 ALREADY_PAID` | continues as paid | n/a | none. The order already has a successful charge, and Payment's guard is what prevents paying twice |
+| Customer/Inventory/Payment unreachable | `FAILED` | `UPSTREAM_ERROR` | release stock if it was reserved |
+| Marketing fails | unaffected | n/a | none. The click stays unconverted (logged at WARN) |
+| Shipment fails | stays `PAID` | n/a | the reconciler retries it |
 
-The service isn't a durable saga engine. If the process dies mid-checkout, the order can be left `PENDING` with stock reserved. That is acceptable for the demo. An optional sweeper can mark stale `PENDING` orders `FAILED`/`UPSTREAM_ERROR` and release their stock.
+**A started checkout always finishes.** It runs on `context.WithoutCancel` of the request context (keeping the trace), so a caller that disconnects mid-checkout (a k6 pod being replaced, a client timeout) can't strand the order in PENDING with stock reserved. Each peer call keeps its own timeout, so a checkout still can't hang. Load testing on kind found this: restarting k6 cancelled in-flight checkouts halfway.
 
-## HTTP Client Configuration
+If releasing stock fails, it's logged at ERROR, and the Inventory restock loop eventually covers the leak. The service isn't a durable saga engine: if the process dies mid-checkout, an order can stay `PENDING` with stock reserved. That's acceptable for the demo.
 
-- One shared `http.Client` with `Transport: otelhttp.NewTransport(http.DefaultTransport)`, so every outbound call carries `traceparent` and produces a client span.
-- Always use `http.NewRequestWithContext(ctx, ...)` with the **inbound request context**. Otherwise the trace breaks into separate traces.
-- Per-dependency timeouts. Critical calls (customer, inventory, payment) default to 2s. Marketing defaults to 500ms. Shipment defaults to 1s.
-- No automatic retries on `POST /payments/process`. A retry could double-charge, because the payment endpoint isn't idempotent per order.
+### Reconciler
+
+[`reconciler.go`](../../services/order/internal/order/reconciler.go) runs beside the HTTP server under the `errgroup`, like Inventory's restocker. Every `RECONCILE_INTERVAL` it loads up to 50 orders that have been `PAID` for longer than `RECONCILE_AFTER` (age measured with the database clock), re-reads each customer, and retries the shipment. Retrying is safe because the Shipment Service creates at most one shipment per order, and `PAID → SHIPPED` is guarded, which also makes it safe with several replicas. It never charges again.
+
+## Service-to-Service Calls
+
+[`clients.go`](../../services/order/internal/order/clients.go) wraps one [`httpclient.Client`](../../pkgs/httpclient/client.go) per peer:
+
+- `otelhttp` transport, and every request built from the inbound context, so the whole checkout is **one trace**.
+- A timeout per peer. Critical calls (customer, inventory, payment) default to 2s, marketing to 500ms, shipment to 1s.
+- Error responses become `*httpclient.APIError` carrying the peer's error code. The typed clients turn the codes they branch on into sentinel errors (`ErrOutOfStock`, `ErrPaymentDeclined`, ...). Anything else is `UPSTREAM_ERROR`.
+- Money is sent as fixed two-decimal strings.
+- **No automatic retries.** Reserve, release and charge aren't idempotent per request.
+- `clients_test.go` replays response bodies copied from each peer's real handler, pinning the contract.
 
 ## Configuration
 
-| Variable | Example |
+| Flag / env var | Default |
 |---|---|
-| `PORT` | `8080` |
-| `DATABASE_URL` | `postgres://demo:demo@postgresql:5432/orders?sslmode=disable&timezone=UTC` |
-| `CUSTOMER_URL` | `http://customer-service:8081` |
-| `MARKETING_URL` | `http://marketing-service:8082` |
-| `INVENTORY_URL` | `http://inventory-service:8083` |
-| `PAYMENT_URL` | `http://payment-service:8084` |
-| `SHIPMENT_URL` | `http://shipment-service:8085` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` |
-| `OTEL_SERVICE_NAME` | `order-service` |
-| `CRITICAL_CALL_TIMEOUT` | `2s` |
+| `--http-addr` / `HTTP_ADDR` | `:8080` |
+| `--database-url` / `DATABASE_URL` | none |
+| `--customer-url` / `CUSTOMER_URL` | `http://localhost:8081` (kind: `http://customer-service:8081`) |
+| `--marketing-url` / `MARKETING_URL` | `http://localhost:8082` |
+| `--inventory-url` / `INVENTORY_URL` | `http://localhost:8083` |
+| `--payment-url` / `PAYMENT_URL` | `http://localhost:8084` |
+| `--shipment-url` / `SHIPMENT_URL` | `http://localhost:8085` |
+| `--critical-timeout` / `CRITICAL_TIMEOUT` | `2s` |
+| `--marketing-timeout` / `MARKETING_TIMEOUT` | `500ms` |
+| `--shipment-timeout` / `SHIPMENT_TIMEOUT` | `1s` |
+| `--reconcile-interval` / `RECONCILE_INTERVAL` | `30s` (`0` disables) |
+| `--reconcile-after` / `RECONCILE_AFTER` | `30s` |
+
+## Running It
+
+```sh
+make deploy-all          # every service, leaf services first
+make forward-order       # localhost:8080
+curl -XPOST localhost:8080/orders/checkout -H 'content-type: application/json' \
+  -d '{"user_id":1,"product_id":"PROD_0001"}'
+make load RATE=10        # continuous k6 journeys inside the cluster
+```
 
 ## Telemetry
 
-- Server span `POST /orders/checkout` (from `otelhttp.NewHandler`), with five downstream client spans (plus a release span on decline).
-- Span attributes: `order.id`, `order.status`, `order.failure_reason`, `order.total_amount`, `customer.id`, `product.id`, `attribution.id`.
-- Set span status to error on `FAILED`, so failed checkouts can be filtered in Tempo by `status=error`.
+- The checkout server span from `otelgin`, plus one client span per downstream call (`POST inventory-service`, ...). On `FAILED` the server span's status is set to error with the reason, so failed checkouts can be filtered in Tempo.
+- Span attributes: `order.id`, `order.status`, `order.total_amount`, `order.failure_reason`, `customer.id`, `product.id`, `attribution.id`.
+- `order.reconcile` root spans from the reconciler.
+
+| Metric | Labels | |
+|---|---|---|
+| `orders_checkouts_total` | `status`, `reason` | Final outcome of each checkout |
+| `orders_revenue_total` | | Dollars of successfully paid orders |
+| `orders_reconciled_total` | `outcome` | Stuck orders retried (`shipped` / `failed`) |
+| `http_client_requests_total` | `peer`, `method`, `status` | From `pkgs/httpclient`. `status="error"` means a transport failure or timeout |
+| `http_client_request_duration_seconds` | `peer`, `method` | Latency of each downstream call as the Order Service sees it |
 
 ## Analytics Impact
 
 This table drives the executive dashboards:
 
-- **Heartbeat:** total orders, orders/minute, revenue/hour (`SUM(total_amount) WHERE status IN ('PAID','SHIPPED')`).
-- **Checkout success rate:** shipped divided by all orders.
-- **Failure breakdown:** count and dollar value by `failure_reason`, showing exactly where the business is losing money (stock vs declines vs customer issues). It is also a natural source for operational alerts.
-- **Join hub:** `orders` links customers (`user_id`), marketing (`attribution_id`), inventory (`product_id`), payments, and shipments (`order_id`).
+- **Heartbeat:** orders per minute, revenue per hour (`SUM(total_amount) WHERE status IN ('PAID','SHIPPED')`).
+- **Checkout success rate:** shipped divided by all orders. Every attempt is a row, so the denominator is honest.
+- **Failure breakdown:** count and dollar value by `failure_reason`, showing exactly where the business is losing money.
+- **Join hub:** `orders` links customers (`user_id`), marketing (`attribution_id`), inventory (`product_id`), payments and shipments (`order_id`).

@@ -1,9 +1,12 @@
 # Marketing Service: Top-of-Funnel Attribution
 
+> **Status: built.** Code is in [`services/marketing`](../../services/marketing). It follows the shared conventions in the [ecosystem README](README.md#3-shared-conventions), and it is the first service with two tables in one database.
+
 | | |
 |---|---|
 | Port | `8082` |
 | Kubernetes service | `marketing-service` |
+| Binary | `marketing` (`serve`, `migrate`) |
 | Database | `marketing` |
 | Tables | `campaigns`, `attributions` |
 | Called by | k6, Order Service |
@@ -15,103 +18,143 @@ The Marketing Service sits at the very edge of the architecture. It connects ano
 
 ## Responsibilities
 
-- **Touchpoint logging.** Records each incoming visit's traffic source (UTM parameters such as `utm_source=facebook`, `utm_campaign=summer_sale`) and issues a unique `attribution_id` for it.
-- **Campaign management.** Keeps the list of active campaigns and their ad spend. This is the cost baseline for ROAS and CAC.
-- **Conversion handshake.** Waits for a conversion. When the Order Service reports a successful checkout, the service attaches the `order_id` to the original attribution, closing the loop from click to purchase.
+- **Touchpoint logging.** Records each visit's traffic source (`utm_source=facebook`, `utm_campaign=summer_sale`) and issues a unique `attribution_id` for it.
+- **Campaign catalog.** Keeps the campaigns and their ad spend. This is the cost baseline for ROAS and CAC.
+- **Conversion handshake.** When the Order Service reports a paid checkout, the service attaches the `order_id` and amount to the original attribution, closing the loop from click to purchase. Exactly one order can ever convert an attribution, and retries are safe.
 
 ## Data Model
 
-Schema as specified:
+The schema is the GORM models in [`internal/marketing/model.go`](../../services/marketing/internal/marketing/model.go). `marketing migrate` applies both with one `database.AutoMigrate(ctx, db, &Campaign{}, &Attribution{})`, so each table gets the base model's `(updated_at, id)` CDC index and its own `updated_at` trigger:
 
-```sql
-CREATE TABLE campaigns (
-    id SERIAL PRIMARY KEY,
-    utm_source VARCHAR(100),
-    utm_campaign VARCHAR(100),
-    ad_spend DECIMAL(10,2),
-    is_deleted BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+```go
+type Campaign struct {         // table "campaigns"
+	database.Model // id BIGSERIAL, created_at/updated_at TIMESTAMPTZ (DB clock), deleted_at, (updated_at, id) index
+	UTMSource   string          `gorm:"size:100;not null;uniqueIndex:idx_campaigns_source_campaign,priority:1,where:deleted_at IS NULL"`
+	UTMCampaign string          `gorm:"size:100;not null;uniqueIndex:idx_campaigns_source_campaign,priority:2,where:deleted_at IS NULL"`
+	AdSpend     decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_campaigns_ad_spend,ad_spend >= 0"` // no default (zero-value trap)
+}
 
-CREATE TABLE attributions (
-    id SERIAL PRIMARY KEY,
-    user_id INT,
-    order_id INT, -- Populated later when the order completes
-    utm_source VARCHAR(100),
-    is_deleted BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TRIGGER campaigns_set_updated_at
-  BEFORE UPDATE ON campaigns FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER attributions_set_updated_at
-  BEFORE UPDATE ON attributions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+type Attribution struct {      // table "attributions"
+	database.Model
+	UserID      uint64           `gorm:"not null;check:chk_attributions_user_id,user_id > 0"`
+	UTMSource   string           `gorm:"size:100;not null"`
+	UTMCampaign string           `gorm:"size:100;not null"`
+	OrderID     *uint64          `gorm:"check:chk_attributions_order_id,order_id > 0"`
+	OrderAmount *decimal.Decimal `gorm:"type:decimal(10,2);check:chk_attributions_order_amount,order_amount > 0"`
+	ConvertedAt *time.Time       `gorm:"check:chk_attributions_conversion,(order_id IS NULL) = (converted_at IS NULL) AND (order_id IS NULL) = (order_amount IS NULL)"`
+}
 ```
 
-`user_id` and `order_id` are logical references to other services' data. They are **not** foreign keys, because those rows live in other databases.
+The generated composite partial index is `CREATE UNIQUE INDEX idx_campaigns_source_campaign ON campaigns (utm_source, utm_campaign) WHERE (deleted_at IS NULL)`; an integration test reads it back from `pg_indexes`.
 
-### Proposed additions
+`user_id` and `order_id` are logical references to the Customer and Order services. They are **not** foreign keys, because those rows live in other databases, and the service never calls the Customer Service to check `user_id`.
 
-```sql
-ALTER TABLE attributions ADD COLUMN utm_campaign VARCHAR(100);   -- join to campaigns at campaign granularity
-ALTER TABLE attributions ADD COLUMN order_amount DECIMAL(10,2);  -- revenue reported at conversion
-ALTER TABLE attributions ADD COLUMN converted_at TIMESTAMP;      -- click-to-purchase latency
-```
+Changes from the original spec:
 
-- Without `utm_campaign`, ROAS can only be computed per source, not per campaign.
-- `order_amount` keeps the "user spent $150 on order 999" fact on the marketing side. Dashboards can still use `payments` as the authoritative cleared amount.
+- The conventions from the README: `BIGSERIAL`, `TIMESTAMPTZ`, `deleted_at` instead of `is_deleted`, every column `NOT NULL` except the conversion fields, and `(utm_source, utm_campaign)` unique among live campaigns.
+- **The three proposed columns are in:** `attributions.utm_campaign` (so ROAS works per campaign, not just per source; resolves README open question 6), `order_amount`, and `converted_at`.
+- `converted_at` is set with `NOW()` in the conversion `UPDATE`. Postgres is the only clock, as for `created_at`/`updated_at`.
+- Named `CHECK`s: `ad_spend >= 0`, `user_id > 0`, `order_id > 0`, `order_amount > 0`, and `chk_attributions_conversion`, which makes the three conversion fields all-NULL or all-set. The application never writes them separately; the CHECK is the backstop.
 
-### Seed data
+### Seed campaigns
 
-At startup the service upserts a fixed campaign catalog so k6 and dashboards have stable keys:
+[`seed.go`](../../services/marketing/internal/marketing/seed.go) is called by `Migrate`, so the `migrate` initContainer loads it. It inserts only when `campaigns` has never held rows (soft-deleted rows count), so redeploys never re-seed or reset ad spend. It's deterministic, so every environment has the same IDs:
 
-| utm_source | utm_campaign | ad_spend |
-|---|---|---|
-| `google` | `search_brand` | 1200.00 |
-| `facebook` | `summer_sale` | 800.00 |
-| `instagram` | `influencer_q3` | 650.00 |
-| `tiktok` | `viral_launch` | 400.00 |
-| `email` | `newsletter` | 0.00 |
-| `organic` | `none` | 0.00 |
+| campaign_id | utm_source | utm_campaign | ad_spend |
+|---|---|---|---|
+| 1 | `google` | `search_brand` | 1200.00 |
+| 2 | `facebook` | `summer_sale` | 800.00 |
+| 3 | `instagram` | `influencer_q3` | 650.00 |
+| 4 | `tiktok` | `viral_launch` | 400.00 |
+| 5 | `email` | `newsletter` | 0.00 |
+| 6 | `organic` | `none` | 0.00 |
 
-Optionally, a background job can increase `ad_spend` over time (for example daily spend accrual), so cost moves alongside revenue in the dashboards.
+The spec said "upserts at startup" behind a `SEED_CAMPAIGNS` flag. Seeding in `migrate`, only into an empty table, follows the Inventory Service pattern and needs no flag. There is no ad-spend accrual job yet; spend is static.
 
 ## API
+
+All errors use the shared body `{"error": "<CODE>", "message": "..."}`. Money is a decimal string with two places (`"800.00"`).
+
+### `GET /campaigns`
+
+Every live campaign, ordered by `campaign_id`. k6 can use it to discover the valid `(utm_source, utm_campaign)` pairs.
+
+```json
+[{ "campaign_id": 2, "utm_source": "facebook", "utm_campaign": "summer_sale", "ad_spend": "800.00",
+   "created_at": "...", "updated_at": "..." }]
+```
 
 ### `POST /attributions`
 
 Logs an ad click or visit. k6 calls this at the start of each user journey and carries the returned ID into checkout.
 
-Request:
-
 ```json
 { "user_id": 1234, "utm_source": "facebook", "utm_campaign": "summer_sale" }
 ```
 
+`user_id` is required and at least 1. `utm_source` and `utm_campaign` are required, at most 100 characters, and must name a live campaign.
+
 | Status | Body |
 |---|---|
-| `201 Created` | `{"attribution_id": 99}` |
-| `400 Bad Request` | `{"error": "INVALID_REQUEST", ...}` (missing `user_id` or `utm_source`) |
+| `201 Created` | `{"attribution_id": 99, "user_id": 1234, "utm_source": "facebook", "utm_campaign": "summer_sale", "created_at": "..."}` |
+| `400 Bad Request` | `INVALID_REQUEST` (missing or invalid field) |
+| `404 Not Found` | `CAMPAIGN_NOT_FOUND`: no live campaign has this `utm_source` + `utm_campaign` |
+
+Changes from the spec: `utm_campaign` is required (the spec only required `utm_source`), and the pair must exist. Rejecting unknown campaigns keeps the `utm_source` metric label low-cardinality and guarantees every attribution joins to a campaign in StarRocks. `404` for an unknown entity named in the body follows the Inventory Service's `PRODUCT_NOT_FOUND`.
+
+### `GET /attributions/{id}`
+
+| Status | Body |
+|---|---|
+| `200 OK` | The attribution object (below) |
+| `400 Bad Request` | `INVALID_REQUEST` (id not a positive integer) |
+| `404 Not Found` | `ATTRIBUTION_NOT_FOUND` |
+
+```json
+{ "attribution_id": 99, "user_id": 1234, "utm_source": "facebook", "utm_campaign": "summer_sale",
+  "order_id": 999, "order_amount": "150.00", "converted_at": "...",
+  "created_at": "...", "updated_at": "..." }
+```
+
+`order_id`, `order_amount` and `converted_at` are `null` until the attribution converts.
 
 ### `PUT /attributions/{id}/order`
 
-Attaches the conversion. The Order Service calls this after payment succeeds.
-
-Request:
+The conversion handshake. The Order Service calls it after payment succeeds.
 
 ```json
-{ "order_id": 999, "order_amount": 150.00 }
+{ "order_id": 999, "order_amount": "150.00" }
 ```
+
+`order_id` is required and at least 1. `order_amount` is required, as a JSON string or number, greater than 0, with at most two decimal places (`"10.500"` is fine, `"10.005"` is not), and at most `99999999.99`.
+
+The check and the write are one statement that only matches an unconverted attribution:
+
+```sql
+UPDATE attributions
+   SET order_id = $2, order_amount = $3, converted_at = NOW()
+ WHERE id = $1
+   AND order_id IS NULL
+   AND deleted_at IS NULL
+RETURNING *;
+```
+
+Postgres locks the row, and under READ COMMITTED a concurrent conversion re-checks `order_id IS NULL` against the winner's row, so exactly one order wins. If no row was updated, a follow-up lookup decides the response: unknown ID → `404`; already converted to the **same** `order_id` → `200` with the stored row (idempotent retry); a **different** `order_id` → `409`.
 
 | Status | Body |
 |---|---|
-| `200 OK` | `{"attribution_id": 99, "order_id": 999}` |
-| `404 Not Found` | `{"error": "ATTRIBUTION_NOT_FOUND", ...}` |
-| `409 Conflict` | `{"error": "ALREADY_CONVERTED", ...}`: the attribution already has a different `order_id` |
+| `200 OK` | The attribution object, converted |
+| `400 Bad Request` | `INVALID_REQUEST` |
+| `404 Not Found` | `ATTRIBUTION_NOT_FOUND` |
+| `409 Conflict` | `ALREADY_CONVERTED`: the attribution already belongs to a different `order_id` |
 
-The call is **idempotent**: sending the same `order_id` again returns `200`, so the Order Service can retry safely.
+**Idempotency: first write wins.** A re-send with the same `order_id` returns `200` and the values from the first conversion; a different `order_amount` in the retry is ignored. A retry writes nothing, so `updated_at` doesn't move and the sync daemon sees no change. (The guard is `order_id IS NULL`, not `order_id IS NULL OR order_id = $2` as first sketched, precisely so a retry can't rewrite the amount or `converted_at`.) Integration tests race 30 different orders against one attribution (exactly one wins, 29 get `ALREADY_CONVERTED`) and 30 retries of the same order (exactly one first conversion, 29 idempotent `200`s).
+
+The spec's `200` body was `{"attribution_id", "order_id"}`. It now returns the full attribution object, a superset.
+
+### Operational endpoints
+
+`GET /healthz`, `GET /readyz` (pings Postgres), `GET /metrics`.
 
 ## Interactions
 
@@ -120,37 +163,85 @@ sequenceDiagram
   participant k6
   participant M as Marketing
   participant O as Order
-  k6->>M: POST /attributions {user_id, utm_source}
-  M-->>k6: {attribution_id: 99}
+  k6->>M: POST /attributions {user_id, utm_source, utm_campaign}
+  M-->>k6: 201 {attribution_id: 99}
   k6->>O: POST /orders/checkout {..., attribution_id: 99}
   Note over O: reserve, pay...
-  O->>M: PUT /attributions/99/order {order_id: 999, order_amount: 150}
-  M-->>O: 200 OK
+  O->>M: PUT /attributions/99/order {order_id: 999, order_amount: "150.00"}
+  M-->>O: 200 (or 409 ALREADY_CONVERTED)
 ```
 
-- **Upstream, k6:** creates touchpoints.
-- **Upstream, Order Service:** reports conversions. This is **not** in the checkout critical path. If the Marketing Service is down or slow, the checkout still succeeds and the attribution stays unconverted. The Order Service makes this call best-effort with a short timeout. It can also run it in a background goroutine with a detached context, keeping the trace link.
+- **Upstream, k6:** creates touchpoints, using the seeded campaign pairs.
+- **Upstream, Order Service:** reports conversions. This is **not** on the checkout critical path: if the Marketing Service is down or slow, the checkout still succeeds and the attribution stays unconverted. The Order Service calls it best-effort with a short timeout, and may retry because the call is idempotent.
 
 ## Configuration
 
-| Variable | Example |
-|---|---|
-| `PORT` | `8082` |
-| `DATABASE_URL` | `postgres://demo:demo@postgresql:5432/marketing?sslmode=disable&timezone=UTC` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel-collector:4317` |
-| `OTEL_SERVICE_NAME` | `marketing-service` |
-| `SEED_CAMPAIGNS` | `true` |
+Every flag can also be set as an environment variable (`--http-addr` ↔ `HTTP_ADDR`). There is no background worker.
+
+| Flag / env var | Default | Notes |
+|---|---|---|
+| `--http-addr` / `HTTP_ADDR` | `:8082` | Set by the chart from `port` |
+| `--database-url` / `DATABASE_URL` | none | In kind: `postgres://datastack-pg-rw:5432/marketing?sslmode=require`, with `PGUSER`/`PGPASSWORD` from the CNPG secret |
+| `--log-level`, `--log-format`, `OTEL_EXPORTER_OTLP_ENDPOINT` | | As for every service |
+
+Helm values: [`deploy/values/marketing.yaml`](../../deploy/values/marketing.yaml).
+
+## Running It
+
+```sh
+make up && make run-marketing     # local Postgres + go run on :8082
+make deploy-marketing             # kind (after make kind-up infra)
+make forward-marketing            # localhost:8082
+
+curl -XPOST localhost:8082/attributions -H 'content-type: application/json' \
+  -d '{"user_id":1234,"utm_source":"facebook","utm_campaign":"summer_sale"}'
+curl -XPUT localhost:8082/attributions/1/order -H 'content-type: application/json' \
+  -d '{"order_id":999,"order_amount":"150.00"}'
+```
+
+The `*-marketing` targets are the Makefile's generic `run-%`/`deploy-%`/`forward-%` rules. They need `marketing:marketing` in `SERVICE_DATABASES` and `marketing:8082` in `SERVICE_PORTS` (plus a local `marketing` database for `make up`).
 
 ## Telemetry
 
-- Inbound spans via `otelhttp.NewHandler`.
-- Span attributes: `attribution.id`, `attribution.utm_source`, `order.id` (on conversion).
+- Inbound spans from `otelgin`, with attributes `attribution.id`, `attribution.utm_source`, `attribution.utm_campaign`, `user.id`, and `order.id` (once converted).
+- Prometheus domain metrics. A conversion is counted only the first time, never on an idempotent retry or a `409`:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `marketing_attributions_total` | `utm_source` | Touchpoints logged |
+| `marketing_conversions_total` | `utm_source` | Attributions converted into a paid order |
+| `marketing_conversion_revenue_total` | `utm_source` | Converted order amount, in dollars (float; the exact figure is the `DECIMAL` in Postgres/StarRocks) |
+
+`utm_source` is a safe label because attributions can only be created for seeded campaigns.
 
 ## Analytics Impact
 
-This service makes Grafana useful to a CMO. Joining attribution to cleared payments shows that, say, $6,000 of today's $10,000 came from Facebook at $500 of spend, and $4,000 came from the newsletter at $0.
+This service makes Grafana useful to a CMO. Joining attributions to campaigns and cleared payments shows that, say, $6,000 of today's $10,000 came from Facebook at $800 of spend, and $4,000 came from the newsletter at $0.
 
-- **Campaign ROI / ROAS:** `SUM(payments.amount WHERE status='SUCCESS') / campaigns.ad_spend`, grouped by source or campaign.
-- **CAC:** `ad_spend / COUNT(DISTINCT converted user_id)`.
-- **Conversion rate:** converted attributions divided by all attributions, per source.
-- **Click-to-purchase latency:** `converted_at - created_at`.
+**ROAS per campaign** (uses `utm_campaign` on both tables; `payments` is the authoritative cleared amount, `attributions.order_amount` the amount reported at conversion):
+
+```sql
+SELECT c.utm_source, c.utm_campaign, c.ad_spend,
+       SUM(p.amount)                          AS revenue,
+       SUM(p.amount) / NULLIF(c.ad_spend, 0)  AS roas      -- NULL for $0 campaigns
+  FROM campaigns c
+  JOIN attributions a ON a.utm_source = c.utm_source AND a.utm_campaign = c.utm_campaign
+  JOIN payments p     ON p.order_id = a.order_id AND p.status = 'SUCCESS'
+ WHERE c.deleted_at IS NULL AND a.deleted_at IS NULL
+ GROUP BY c.utm_source, c.utm_campaign, c.ad_spend;
+```
+
+**CAC per campaign:**
+
+```sql
+SELECT c.utm_source, c.utm_campaign,
+       c.ad_spend / NULLIF(COUNT(DISTINCT a.user_id), 0) AS cac
+  FROM campaigns c
+  JOIN attributions a ON a.utm_source = c.utm_source AND a.utm_campaign = c.utm_campaign
+ WHERE a.order_id IS NOT NULL
+ GROUP BY c.utm_source, c.utm_campaign, c.ad_spend;
+```
+
+- **Conversion rate:** `COUNT(order_id) / COUNT(*)` over `attributions`, per source or campaign.
+- **Click-to-purchase latency:** `converted_at - created_at`, both from the database clock.
+- **Real-time view:** `rate(marketing_conversion_revenue_total[5m])` by `utm_source` in Prometheus, before the CDC data lands in StarRocks.
