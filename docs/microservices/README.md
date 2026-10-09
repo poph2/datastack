@@ -2,9 +2,9 @@
 
 This is the architecture of DataStack's e-commerce microservice ecosystem. It replaces the earlier single-binary orchestrator design (Customer/Inventory/Sales/Invoicing over in-memory Go channels).
 
-The ecosystem has six Go HTTP microservices and a Go CDC sync daemon. It runs on a local Kubernetes (kind) cluster. k6 generates the traffic, OpenTelemetry emits distributed traces, and the sync daemon streams operational data into StarRocks for real-time Grafana dashboards.
+The ecosystem has six Go HTTP microservices, a Go CDC sync daemon and a Go analyzer that answers plain-English questions with SQL over StarRocks. It runs on a local Kubernetes (kind) cluster. k6 generates the traffic, OpenTelemetry emits distributed traces, the sync daemon streams operational data into StarRocks for real-time Grafana dashboards, and a Next.js web UI drives the demo: asking questions, injecting chaos and setting the load.
 
-> **Status:** all six microservices, the CDC sync daemon and the k6 load generator are built. The Customer Service ([`services/customer`](../../services/customer)) is the reference implementation for the conventions in §3.
+> **Status:** all six microservices, the CDC sync daemon, the analyzer, the web UI and the k6 load generator are built. The Customer Service ([`services/customer`](../../services/customer)) is the reference implementation for the conventions in §3.
 
 ## Service Index
 
@@ -16,15 +16,18 @@ The ecosystem has six Go HTTP microservices and a Go CDC sync daemon. It runs on
 | Inventory Service | 8083 | `inventory` | `inventory` | Stock levels, reservations, product catalog | [inventory-service.md](inventory-service.md) |
 | Payment Service | 8084 | `payments` | `payments` | Simulated card processing with injected failures | [payment-service.md](payment-service.md) |
 | Shipment Service | 8085 | `shipments` | `shipments` | Simulated fulfillment with artificial packing delay | [shipment-service.md](shipment-service.md) |
-| CDC Sync App | n/a | reads all six | n/a | Watermark polling into StarRocks Stream Load | [cdc-sync.md](cdc-sync.md) |
+| CDC Sync App | 8090 | reads all six | n/a | Watermark polling into StarRocks Stream Load | [cdc-sync.md](cdc-sync.md) |
+| Analyzer Service | 8086 | none (reads StarRocks) | n/a | Plain-English questions → SQL over `analytics_db`, via a pluggable LLM (Ollama by default) | [analyzer-service.md](analyzer-service.md) |
+| Web UI | 3001 | none | n/a | Demo control center: ask the data, chaos toggles, k6 load, Grafana links | [apps/web/README.md](../../apps/web/README.md) |
 
 ## 1. System Topology
 
-The ecosystem has three layers:
+The ecosystem has four layers:
 
 1. **Operational layer (Go + PostgreSQL).** Six independent HTTP REST microservices. Each one owns its own logical database inside a shared PostgreSQL instance. They talk to each other synchronously over HTTP JSON APIs. No service reads another service's database.
 2. **Observability layer (OpenTelemetry + Tempo).** Every Go service is instrumented with OpenTelemetry. Spans go to an OTel Collector, are stored in Grafana Tempo, and are viewed in Grafana.
 3. **Analytical layer (Go CDC + StarRocks).** A Go sync daemon polls the `updated_at` watermark of every operational table and pushes micro-batches into StarRocks over HTTP Stream Load. Grafana dashboards query StarRocks.
+4. **Insight layer (Analyzer + Web UI).** The Analyzer turns a plain-English question into one read-only StarRocks query, using the table and column comments (§3.2) as its context. The web UI is the demo's single screen: questions, chaos toggles (§3.8) and k6 load.
 
 ```mermaid
 flowchart LR
@@ -50,7 +53,13 @@ flowchart LR
     SR[(StarRocks<br/>analytics_db)]
   end
 
+  subgraph Insight["Insight layer"]
+    Analyzer[Analyzer :8086]
+    Web[Web UI :3001]
+  end
+
   Grafana[Grafana]
+  LLM[(Ollama or Claude API)]
 
   k6 -->|POST /customers| Customer
   k6 -->|POST /attributions| Marketing
@@ -71,6 +80,11 @@ flowchart LR
 
   Grafana --> Tempo
   Grafana --> SR
+
+  Web -->|POST /ask| Analyzer
+  Web -. /admin/chaos .-> Operational
+  Analyzer --> LLM
+  Analyzer -->|read-only SELECT| SR
 ```
 
 ### Call graph
@@ -206,6 +220,7 @@ Enforcement:
 - **Status codes:** `400` only for malformed or invalid input, `404` for an unknown entity, and `409` when a valid request conflicts with current state (`EMAIL_EXISTS`, `OUT_OF_STOCK`). Callers branch on the `error` code, never on the status alone.
 - **Money** is `shopspring/decimal` in Go and `DECIMAL(10,2)` in Postgres, never `float64`. In JSON it is a fixed two-decimal **string** (`"49.99"`, `"50.00"`, via `StringFixed(2)`), so JavaScript clients can't silently round it. Requests should accept the same form, since `decimal.Decimal` unmarshals both strings and numbers.
 - Every service exposes `GET /healthz` (liveness), `GET /readyz` (readiness; pings the DB) and `GET /metrics`. These sit outside the tracing and logging middleware, so probes don't create noise.
+- Every business service also exposes `GET`/`PUT`/`DELETE /admin/chaos` (§3.8). Admin routes are traced and logged but never delayed by the chaos latency.
 - Service-to-service URLs come from environment variables populated by ConfigMaps (for example `PAYMENT_URL=http://payment-service:8084`).
 - Outbound HTTP clients use explicit timeouts. No call waits forever.
 
@@ -229,6 +244,7 @@ pkgs/                       # shared by every service
   telemetry/   OTel tracer provider + W3C propagator
   httpclient/  service-to-service JSON client (otelhttp, per-peer timeout, *APIError with the peer's error code, client metrics)
   pgtest/      testcontainers Postgres for integration tests
+  chaos/       runtime chaos knobs: store, /admin/chaos routes, latency middleware, chaos_knob_value gauge (§3.8)
 tools/catalog/   generates and validates docs/microservices/data-catalog.md from the documented schemas
 services/<name>/
   main.go      root command: serve + migrate
@@ -241,8 +257,10 @@ services/<name>/
 deploy/
   charts/go-service/   one generic chart for every service
   values/<name>.yaml   per-service values
-  infra/               CNPG Postgres cluster
+  infra/               CNPG Postgres cluster, StarRocks
+  web/                 the web UI's Deployment, Service and k6-only RBAC
   kind/                cluster config
+apps/web/              the web UI (Next.js), its own Dockerfile
 ```
 
 A service adds a service layer between handler and repository only when it has real business logic. The Order Service's orchestration will have one; the Customer Service doesn't need one.
@@ -265,6 +283,27 @@ More patterns, established by the Inventory Service:
 - Handler tests go through the real shared router (`httpserver.NewRouter`) with a fake `Store`.
 - Repository tests run the service's real `Migrate` against Postgres in testcontainers (`pkgs/pgtest`) and assert the schema behaviour: triggers, constraints, soft delete.
 - `make test` runs everything (needs Docker). `make test-unit` (`go test -short`) skips the containers.
+
+### 3.8 Chaos toggles
+
+Every business service can be degraded at runtime, without a restart, so the demo can show a failure arriving in the dashboards, traces and analytics. `pkgs/chaos` provides it:
+
+- A **knob** has a name, description, default, bounds and whether it is a whole number. Its value is stored atomically, so hot paths read it without a lock. The CLI flag it replaces becomes its default (`--failure-rate` is `decline_rate`'s default).
+- Domain types own their knobs and expose them with `ChaosKnobs()` (`Gateway`, `Planner`, `Packer`, `Restocker`). `chaos.NewStore(service, logger, knobs...)` adds the shared `latency_ms` knob first.
+- `Store.Routes(...)` wraps a service's `RegisterRoutes`: it adds `GET`/`PUT`/`DELETE /admin/chaos` (plus extra admin actions) and puts the API routes behind the latency middleware.
+- `PUT` takes a partial object and is all-or-nothing: an unknown knob or an out-of-range value is a `400 INVALID_REQUEST` and nothing changes. `DELETE` restores every default. Every change is logged at INFO with the old and new value and exported as `chaos_knob_value{knob}`.
+- State is **in memory, per pod**: it resets when the pod restarts and isn't shared between replicas. Every business service runs one replica.
+
+| Service | Knob | Range | Default | Effect |
+|---|---|---|---|---|
+| all six | `latency_ms` | 0–5000, whole | 0 | Delay before each API request (not `/admin`, probes or `/metrics`). The span gets `chaos.latency_ms` and start/end events |
+| payment | `decline_rate` | 0–1 | `--failure-rate` (0.05) | Share of charges declined, read per charge |
+| shipment | `packing_delay_factor` | 1–20 | 1 | Multiplies the packing delay of new shipments |
+| shipment | `ship_capacity` | 0–1000, whole | `--ship-capacity` (10) | Boxes shipped per packer run. 0 pauses shipping |
+| inventory | `restock_paused` | 0 or 1 | 0 | 1 skips the background restock runs |
+| inventory | `POST /admin/chaos/drain-stock` `{"products": 1..100}` | | | Sets `stock_level = 0` on N random in-stock products in one `UPDATE`; returns `{"drained", "product_ids"}` |
+
+The web UI's Chaos page drives these. With curl: `curl -X PUT localhost:8084/admin/chaos -d '{"decline_rate":0.9}'` after `make forward-payment`.
 
 ## 4. Telemetry (OpenTelemetry)
 
@@ -327,6 +366,14 @@ Tables synced (seven tables across six databases):
 | `shipments` | `shipments` | `analytics_db.shipments` |
 | `orders` | `orders` | `analytics_db.orders` |
 
+### Asking questions (Analyzer)
+
+The Analyzer Service ([`services/analyzer`](../../services/analyzer), [analyzer-service.md](analyzer-service.md)) is the consumer the schema documentation (§3.2) was written for:
+
+1. Every minute it reads `information_schema` in `analytics_db`: table comments, columns with their comments, and the `[ref: table.column]` join markers. It renders them into a compact system prompt with the global conventions, the metric definitions and a few worked examples.
+2. `POST /ask` sends the question to the LLM (Ollama by default, or the Claude API with `LLM_PROVIDER=anthropic`; the model can be picked per request), extracts the SQL, checks it is a single `SELECT`, runs `EXPLAIN`, then executes it as a read-only StarRocks user with a row cap and a timeout. A failed query goes back to the model once for repair.
+3. `make eval` scores generated SQL against reference answers for a fixed question set, run inside the analyzer pod against live data.
+
 ### Dashboards this enables
 
 | Dashboard | Joins |
@@ -349,7 +396,9 @@ Tables synced (seven tables across six databases):
 | Dashboards | Grafana with provisioned datasources and the seven DataStack dashboards (§4). `make grafana` serves it on localhost:3000 |
 | Analytics | StarRocks as one all-in-one pod (`starrocks/allin1-ubuntu`, FE and BE together, 3 GB limit), a StatefulSet plus Service `starrocks` in `deploy/infra/starrocks.yaml` (`make analytics`) |
 | CDC Sync App | The go-service chart with no database of its own and no migrate step, single replica, `Recreate` strategy (`deploy/values/cdc-sync.yaml`). It's stateless, so no PVC |
-| Load | k6 as a continuous Deployment (steady demo traffic) or a CronJob (bursts) |
+| Load | k6 as a continuous Deployment (steady demo traffic), started and scaled by `make load` or the web UI |
+| Analyzer | The go-service chart with no database (`deploy/values/analyzer.yaml`). Calls Ollama at `OLLAMA_URL` (default `host.docker.internal:11434`, which only resolves under Docker Desktop; pass `make deploy-analyzer OLLAMA_URL=...` elsewhere) or the Claude API (optional secret `analyzer-anthropic`) |
+| Web UI | `apps/web` (Next.js standalone image) with plain manifests in `deploy/web/`. Its ServiceAccount may only `get`/`patch` the `k6` Deployment |
 
 Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
 
@@ -359,15 +408,18 @@ make infra                   # CNPG operator + Postgres cluster
 make analytics               # StarRocks (one all-in-one pod, ~3 GB)
 make observability           # OTel Collector, Tempo, Prometheus, Grafana + dashboards
 make grafana                 # Grafana on http://localhost:3000
-make deploy-all              # build, kind load and helm install every service + the CDC daemon
+make deploy-all              # build, kind load and install every service, the CDC daemon, the analyzer and the web UI
 make deploy-order            # ...or one service at a time
-make load RATE=10            # continuous k6 journeys inside the cluster; make load-stop to end
+make deploy-analyzer OLLAMA_URL=http://<host>:11434   # point the analyzer at an Ollama server
+make eval                    # score the analyzer's SQL against the reference answers (EVAL_ARGS="--eval-model qwen3.5:9b")
+make web                     # deploy the web UI and serve it on http://localhost:3001
+make load RATE=10            # continuous k6 journeys inside the cluster; make load-stop scales k6 to zero
 make forward-order           # port-forward localhost:8080 (any service: forward-<name>)
 make status                  # pods and CNPG databases
 make up && make run-customer # local alternative: Postgres via docker compose + go run
 ```
 
-Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `starrocks`, `datastack-pg-rw`, `otel-collector`, `tempo`, `prometheus`, `grafana`.
+Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `analyzer-service`, `web`, `starrocks`, `datastack-pg-rw`, `otel-collector`, `tempo`, `prometheus`, `grafana`.
 
 ### Load generator (k6)
 
@@ -395,4 +447,8 @@ The gaps between the original spec and the per-service narratives, and how they 
 9. **Double charges:** a partial unique index lets an order have at most one successful payment (`409 ALREADY_PAID`).
 10. **Shipment packing:** a database-driven worker (`FOR UPDATE SKIP LOCKED`, capacity per tick), not an in-memory queue, so it is safe with several replicas and survives restarts.
 11. **CDC state:** no watermark file. Cursors are re-derived from StarRocks at startup, and loads are idempotent upserts (see [cdc-sync.md](cdc-sync.md)).
-12. **Runtime target:** kind (not Docker Compose), synchronous HTTP between services (no message broker), StarRocks as the only analytical store, and OTel/Tempo plus Prometheus/Grafana for observability. The earlier Ollama agent, Metabase and Next.js UI plans were dropped.
+12. **Runtime target:** kind (not Docker Compose), synchronous HTTP between services (no message broker), StarRocks as the only analytical store, and OTel/Tempo plus Prometheus/Grafana for observability. Metabase was dropped.
+13. **Text-to-SQL context lives in the schema.** The analyzer has no hand-written semantic layer: it reads the comments that the GORM models put on every table and column (§3.2), so documenting a new column is all it takes for the analyzer to use it.
+14. **Pluggable LLM, local by default.** Ollama (`qwen2.5-coder` unless another model is picked) keeps the demo offline; the Claude API is one setting away. Ollama runs outside the cluster, on a machine with a GPU if possible: on a CPU, the first question after the model loads takes minutes.
+15. **Chaos is in-memory and per pod** (§3.8): no extra table, nothing synced to StarRocks, and a restart is a full reset.
+16. **Stranded orders:** the Order Service's reconciler also resolves orders stuck in `PENDING` (`--pending-after`, 2m). If the order was paid it moves to `PAID`; otherwise it releases any reserved stock and fails with `UPSTREAM_ERROR` (see [order-service.md](order-service.md)).

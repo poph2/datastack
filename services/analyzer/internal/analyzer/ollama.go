@@ -37,6 +37,10 @@ type OllamaConfig struct {
 	// the question has to be processed. On a CPU-only machine that is the
 	// difference between seconds and minutes.
 	KeepAlive string
+	// MaxTokens is num_predict, a cap on the reply. A query is a few
+	// hundred tokens at most, and on a CPU a model that rambles instead
+	// would otherwise hold the request for minutes.
+	MaxTokens int
 }
 
 // Ollama generates SQL with a model served by Ollama's /api/chat.
@@ -79,6 +83,7 @@ type ollamaMessage struct {
 type ollamaOptions struct {
 	Temperature float64 `json:"temperature"`
 	NumCtx      int     `json:"num_ctx"`
+	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
 type ollamaChatResponse struct {
@@ -104,7 +109,7 @@ func (o *Ollama) Generate(ctx context.Context, req GenerateRequest) (string, err
 		Model:     req.Model,
 		Messages:  messages,
 		KeepAlive: o.config.KeepAlive,
-		Options:   ollamaOptions{Temperature: 0, NumCtx: o.config.ContextSize},
+		Options:   ollamaOptions{Temperature: 0, NumCtx: o.config.ContextSize, NumPredict: o.config.MaxTokens},
 	}
 
 	var reply ollamaChatResponse

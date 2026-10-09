@@ -39,7 +39,13 @@ env:
   # Without a GPU (Intel Macs), Ollama runs on the CPU: the first question
   # after the model loads must process the whole ~4k-token schema prompt,
   # which takes minutes. Later questions reuse it and take seconds.
-  LLM_TIMEOUT: 300s
+  LLM_TIMEOUT: 180s
+  # Bounds a whole question (both attempts). Must stay below the web UI's
+  # proxy timeout (280s, apps/web/src/app/api/ask/route.ts), so the page shows
+  # the analyzer's error rather than its own.
+  ASK_TIMEOUT: 240s
+  # Caps each reply; a query never needs more.
+  OLLAMA_MAX_TOKENS: "512"
   MAX_ATTEMPTS: "2"
   MAX_ROWS: "500"
   QUERY_TIMEOUT: 15s

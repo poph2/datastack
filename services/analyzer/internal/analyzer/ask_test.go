@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,6 +161,32 @@ func TestNewAskerValidatesConfig(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewAsker(loadedSchemas(), &fakeGenerator{}, &fakeDatabase{}, AskConfig{MaxAttempts: 1, MaxRows: 0}, discardLogger)
 	require.Error(t, err)
+	_, err = NewAsker(loadedSchemas(), &fakeGenerator{}, &fakeDatabase{}, AskConfig{MaxAttempts: 1, MaxRows: 1, Timeout: -time.Second}, discardLogger)
+	require.Error(t, err)
+}
+
+// slowGenerator blocks until its context ends, like a model that can't
+// answer in time.
+type slowGenerator struct{ fakeGenerator }
+
+func (g *slowGenerator) Generate(ctx context.Context, _ GenerateRequest) (string, error) {
+	<-ctx.Done()
+	return "", fmt.Errorf("%w: %w", ErrLLMUnavailable, ctx.Err())
+}
+
+func TestAskTimeoutBoundsTheWholeQuestion(t *testing.T) {
+	asker, err := NewAsker(loadedSchemas(), &slowGenerator{}, &fakeDatabase{},
+		AskConfig{MaxAttempts: 2, MaxRows: 1, Timeout: 20 * time.Millisecond}, discardLogger)
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = asker.Ask(context.Background(), "q", "")
+
+	var failure *AskError
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, CodeLLMUnavailable, failure.Code)
+	assert.Contains(t, failure.Message, "no answer within the 20ms limit")
+	assert.Less(t, time.Since(start), time.Second)
 }
 
 func TestWarmUpSendsTheSystemPromptToTheDefaultModel(t *testing.T) {

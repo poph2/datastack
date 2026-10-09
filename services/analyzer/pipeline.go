@@ -29,6 +29,8 @@ const (
 	flagOllamaURL         = "ollama-url"
 	flagOllamaNumCtx      = "ollama-num-ctx"
 	flagOllamaKeepAlive   = "ollama-keep-alive"
+	flagOllamaMaxTokens   = "ollama-max-tokens"
+	flagAskTimeout        = "ask-timeout"
 	flagLLMTimeout        = "llm-timeout"
 	flagMaxAttempts       = "max-attempts"
 	flagMaxRows           = "max-rows"
@@ -53,7 +55,9 @@ func addPipelineFlags(flags *pflag.FlagSet) {
 	flags.String(flagOllamaURL, "http://host.docker.internal:11434", "Ollama base URL")
 	flags.Int(flagOllamaNumCtx, 8192, "Ollama context window in tokens; must fit the schema prompt")
 	flags.String(flagOllamaKeepAlive, "30m", "how long Ollama keeps the model (and the cached schema prompt) loaded between questions")
+	flags.Int(flagOllamaMaxTokens, 512, "most tokens Ollama may generate per reply (num_predict)")
 	flags.Duration(flagLLMTimeout, 60*time.Second, "timeout for one LLM generation")
+	flags.Duration(flagAskTimeout, 2*time.Minute, "timeout for a whole question, every attempt included (0 disables)")
 	flags.Int(flagMaxAttempts, 2, "generations per question: the first plus repairs after a failed query")
 	flags.Int(flagMaxRows, 500, "most rows returned per answer; more are reported as truncated")
 	flags.Duration(flagQueryTimeout, 15*time.Second, "timeout for EXPLAIN and for running a generated query")
@@ -112,6 +116,7 @@ func newPipeline(ctx context.Context, v *viper.Viper) (*pipeline, error) {
 	asker, err := analyzer.NewAsker(schemas, generator, starRocks, analyzer.AskConfig{
 		MaxAttempts: v.GetInt(flagMaxAttempts),
 		MaxRows:     v.GetInt(flagMaxRows),
+		Timeout:     v.GetDuration(flagAskTimeout),
 	}, logger)
 	if err != nil {
 		shutdown()
@@ -136,6 +141,7 @@ func newGenerator(v *viper.Viper) (analyzer.Generator, error) {
 			Timeout:      timeout,
 			ContextSize:  v.GetInt(flagOllamaNumCtx),
 			KeepAlive:    v.GetString(flagOllamaKeepAlive),
+			MaxTokens:    v.GetInt(flagOllamaMaxTokens),
 		}), nil
 	case analyzer.ProviderAnthropic:
 		if model == "" {

@@ -223,11 +223,13 @@ Every flag can also be set as an environment variable (`--max-rows` ↔ `MAX_ROW
 | `--schema-refresh-interval` / `SCHEMA_REFRESH_INTERVAL` | `1m` | Also re-grants the read-only user |
 | `--llm-provider` / `LLM_PROVIDER` | `ollama` | `ollama` or `anthropic` |
 | `--model` / `MODEL` | empty | Default model. Empty: `qwen2.5-coder:latest` (ollama), `claude-opus-5-5` (anthropic) |
-| `--ollama-url` / `OLLAMA_URL` | `http://host.docker.internal:11434` | |
+| `--ollama-url` / `OLLAMA_URL` | `http://host.docker.internal:11434` | Resolves only under Docker Desktop. Elsewhere: `make deploy-analyzer OLLAMA_URL=http://<host>:11434` |
 | `--ollama-num-ctx` / `OLLAMA_NUM_CTX` | `8192` | Must fit the ~2.6k-token prompt plus repairs. Changing it reloads the model |
 | `--ollama-keep-alive` / `OLLAMA_KEEP_ALIVE` | `30m` | How long the model and its cached prompt stay loaded |
 | `--warm-up` / `WARM_UP` | `true` | `serve` only, Ollama only: cache the prompt at start-up |
-| `--llm-timeout` / `LLM_TIMEOUT` | `60s` | Per generation. The kind values use `300s` for CPU-only Ollama |
+| `--ollama-max-tokens` / `OLLAMA_MAX_TOKENS` | `512` | `num_predict`: caps a reply, so a rambling model can't hold a request for minutes |
+| `--llm-timeout` / `LLM_TIMEOUT` | `60s` | Per generation. The kind values use `180s` for CPU-only Ollama |
+| `--ask-timeout` / `ASK_TIMEOUT` | `2m` | A whole question, every attempt included (0 disables). The kind values use `240s`, below the web UI's 280s proxy timeout, so the page shows the analyzer's error rather than its own |
 | `--max-attempts` / `MAX_ATTEMPTS` | `2` | First generation plus repairs |
 | `--max-rows` / `MAX_ROWS` | `500` | |
 | `--query-timeout` / `QUERY_TIMEOUT` | `15s` | Context deadline and StarRocks `query_timeout` |
@@ -239,11 +241,9 @@ Every flag can also be set as an environment variable (`--max-rows` ↔ `MAX_ROW
 ## Running It
 
 ```sh
-docker build --build-arg SERVICE=analyzer -t datastack/analyzer:dev .
-kind load docker-image datastack/analyzer:dev --name datastack
-helm --kube-context kind-datastack upgrade --install analyzer-service deploy/charts/go-service \
-  -f deploy/values/analyzer.yaml --wait
-kubectl --context kind-datastack port-forward svc/analyzer-service 8086:8086
+make deploy-analyzer                                   # Ollama at host.docker.internal (Docker Desktop)
+make deploy-analyzer OLLAMA_URL=http://<host>:11434    # any other Ollama server
+make forward-analyzer                                  # localhost:8086
 
 curl localhost:8086/models
 curl localhost:8086/schema | jq '.joins'
@@ -281,4 +281,14 @@ The Analyzer writes nothing. It reads all seven `analytics_db` tables and depend
 
 ## Eval Results
 
-EVAL_RESULTS_PLACEHOLDER
+Not measured yet: the evaluation needs the full stack with data loaded, and a machine where Ollama has a GPU. On a CPU-only 2019 Intel MacBook, `qwen2.5-coder` took ~120s to read the schema prompt once and ~3 tokens/s to write, so one question took minutes.
+
+Run it once the stack has been up under load for a while:
+
+```sh
+make eval                                          # default model
+make eval EVAL_ARGS="--eval-model qwen3.5:9b"      # another model
+make eval EVAL_ARGS="--cases revenue_by_tier"      # one case
+```
+
+Record the score per model here. For each failure, decide whether the model or the documentation is at fault before touching the prompt (see Analytics Impact).

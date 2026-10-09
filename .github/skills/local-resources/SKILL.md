@@ -6,7 +6,7 @@ argument-hint: "Workload, chart values, or manifest being resource-budgeted"
 
 # Local Resources (DataStack)
 
-DataStack runs on a developer laptop: one kind node inside Docker Desktop, with roughly 8 GB of memory for everything. A single workload without limits, or with oversized ones, can make the demo machine unusable mid-talk. Every workload therefore declares explicit requests and limits.
+DataStack runs on a single kind node. A small laptop (a 16 GB Intel Mac with ~8 GB for Docker) can't run the whole stack: it starves the node of CPU, probes fail and pods restart. The full stack runs on a bigger demo machine, but it still has to fit comfortably, and a single workload without limits can make the demo machine unusable mid-talk. Every workload therefore declares explicit requests and limits. Ollama runs outside the cluster and needs its own headroom, ideally a GPU.
 
 ## Core Rule
 
@@ -21,11 +21,14 @@ Every container on the kind cluster has `resources.requests` and `resources.limi
 
 | Workload | Requests | Limits | Where |
 |---|---|---|---|
-| Each Go service (×7 incl. cdc-sync) | 50m / 64Mi | 500m / 256Mi | go-service chart default |
+| Each Go service (×6 business services) | 50m / 64Mi | 500m / 256Mi | go-service chart default |
+| CDC sync | 25m / 32Mi | 250m / 128Mi | `deploy/values/cdc-sync.yaml` |
+| Analyzer | 25m / 32Mi | 250m / 128Mi | `deploy/values/analyzer.yaml` (waits on the LLM; result sets are capped) |
+| Web UI (Next.js) | 25m / 96Mi | 500m / 256Mi | `deploy/web/deployment.yaml` |
 | Postgres (CNPG, all six databases) | 100m / 256Mi | 1 CPU / 1Gi | `deploy/infra/postgres.yaml` |
 | StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 3Gi | `deploy/infra/starrocks.yaml` |
 | k6 | 100m / 64Mi | 1 CPU / 256Mi | `deploy/k6/deployment.yaml` |
-| OTel Collector | 25m / 64Mi | 250m / 192Mi | `deploy/observability/otel-collector.yaml` |
+| OTel Collector | 25m / 64Mi | 500m / 192Mi | `deploy/observability/otel-collector.yaml` |
 | Tempo | 50m / 192Mi | 500m / 640Mi | `deploy/observability/tempo.yaml` |
 | Prometheus (+ config reloader 5m / 16Mi) | 50m / 256Mi | 500m / 768Mi | `deploy/observability/prometheus.yaml` |
 | Grafana | 50m / 128Mi | 500m / 384Mi | `deploy/observability/grafana.yaml` |

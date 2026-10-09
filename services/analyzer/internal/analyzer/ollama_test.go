@@ -21,7 +21,7 @@ func TestOllamaGenerate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ollama := NewOllama(OllamaConfig{URL: server.URL + "/", DefaultModel: "m", Timeout: time.Second, ContextSize: 8192, KeepAlive: "30m"})
+	ollama := NewOllama(OllamaConfig{URL: server.URL + "/", DefaultModel: "m", Timeout: time.Second, ContextSize: 8192, KeepAlive: "30m", MaxTokens: 512})
 	reply, err := ollama.Generate(context.Background(), GenerateRequest{
 		Model:    "qwen",
 		System:   "rules",
@@ -41,7 +41,7 @@ func TestOllamaGenerate(t *testing.T) {
 		"stream":     false,
 		"think":      false,
 		"keep_alive": "30m",
-		"options":    map[string]any{"temperature": float64(0), "num_ctx": float64(8192)},
+		"options":    map[string]any{"temperature": float64(0), "num_ctx": float64(8192), "num_predict": float64(512)},
 	}, got)
 }
 

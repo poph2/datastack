@@ -25,13 +25,18 @@ SERVICE_TABLE := customer:customers:8081 marketing:marketing:8082 inventory:inve
 SERVICES      := $(foreach s,$(SERVICE_TABLE),$(word 1,$(subst :, ,$(s))))
 service_field  = $(word $(2),$(subst :, ,$(filter $(1):%,$(SERVICE_TABLE))))
 database_for   = $(call service_field,$(1),2)
-port_for       = $(or $(call service_field,$(1),3),$(if $(filter cdc-sync,$(1)),8090))
+port_for       = $(or $(call service_field,$(1),3),$(if $(filter cdc-sync,$(1)),8090),$(if $(filter analyzer,$(1)),8086))
+
+# Ollama URL the analyzer calls, e.g. `make deploy-analyzer OLLAMA_URL=http://10.0.0.5:11434`.
+# Empty keeps deploy/values/analyzer.yaml's host.docker.internal, which only
+# resolves under Docker Desktop.
+OLLAMA_URL ?=
 
 # Journeys per second for `make load`.
 RATE ?= 5
 
 .PHONY: catalog catalog-migrate catalog-check up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status \
-        observability dashboards dashboards-configmap grafana
+        observability dashboards dashboards-configmap grafana eval web web-image deploy-web forward-web
 
 ## Local Postgres (docker compose) for `go run` development
 
@@ -157,11 +162,38 @@ image-%:
 	kind load docker-image datastack/$*:$(IMAGE_TAG) --name $(CLUSTER)
 
 # deploy-all is listed explicitly so it isn't matched by the deploy-% pattern.
-deploy-all: $(addprefix deploy-,$(SERVICES)) deploy-cdc-sync
+deploy-all: $(addprefix deploy-,$(SERVICES)) deploy-cdc-sync deploy-analyzer deploy-web
 
 deploy-%: image-%
 	$(HELM) upgrade --install $*-service deploy/charts/go-service \
-		-f deploy/values/$*.yaml --set image.tag=$(IMAGE_TAG) --wait --timeout 5m
+		-f deploy/values/$*.yaml --set image.tag=$(IMAGE_TAG) --wait --timeout 5m \
+		$(if $(and $(filter analyzer,$*),$(OLLAMA_URL)),--set env.OLLAMA_URL=$(OLLAMA_URL))
+
+## Analyzer evaluation
+
+# Scores the analyzer's SQL against the reference answers, inside its pod,
+# e.g. `make eval EVAL_ARGS="--eval-model qwen3.5:9b --cases revenue_by_tier"`.
+eval:
+	$(KUBECTL) exec deploy/analyzer-service -- /service eval $(EVAL_ARGS)
+
+## Web UI (apps/web, Next.js). Not a Go service, so it has its own targets.
+
+web-image:
+	docker build -t datastack/web:$(IMAGE_TAG) apps/web
+	kind load docker-image datastack/web:$(IMAGE_TAG) --name $(CLUSTER)
+
+# The manifest's image tag is swapped before apply, so the rollout goes
+# straight to the new image.
+deploy-web: web-image
+	$(KUBECTL) apply -f deploy/web/rbac.yaml
+	sed 's|image: datastack/web:dev|image: datastack/web:$(IMAGE_TAG)|' deploy/web/deployment.yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) rollout status deployment/web --timeout=5m
+
+# The web UI on http://localhost:3001. Its Grafana links expect `make grafana`.
+forward-web:
+	$(KUBECTL) port-forward svc/web 3001:3001
+
+web: deploy-web forward-web
 
 # Forwards a deployed service to localhost on its own port, e.g. `make forward-order`.
 forward-%:

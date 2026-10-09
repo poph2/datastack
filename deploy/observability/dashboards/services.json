@@ -1478,7 +1478,7 @@
     {
       "type": "timeseries",
       "title": "Stuck-order reconciliations",
-      "description": "Is the reconciler rescuing orders stuck in PAID? orders_reconciled_total per minute by outcome.",
+      "description": "Is the reconciler rescuing stranded orders? orders_reconciled_total per minute by outcome: shipped (stuck PAID retried), paid, released and cancelled (stranded PENDING resolved), failed (attempt failed, retried later).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

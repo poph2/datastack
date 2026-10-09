@@ -42,6 +42,10 @@ type AskConfig struct {
 	// MaxAttempts counts the first generation plus repairs.
 	MaxAttempts int
 	MaxRows     int
+	// Timeout bounds a whole question, every attempt included, so a caller
+	// with its own deadline (the web UI's proxy) gets the analyzer's error
+	// instead of a dropped connection. Zero means no limit.
+	Timeout time.Duration
 }
 
 // Answer is a question answered with data.
@@ -88,6 +92,9 @@ func NewAsker(schemas Schemas, generator Generator, db Database, config AskConfi
 	if config.MaxRows < 1 {
 		return nil, fmt.Errorf("max rows must be at least 1, got %d", config.MaxRows)
 	}
+	if config.Timeout < 0 {
+		return nil, fmt.Errorf("ask timeout must not be negative, got %s", config.Timeout)
+	}
 	return &Asker{schemas: schemas, generator: generator, db: db, config: config, logger: logger}, nil
 }
 
@@ -101,6 +108,12 @@ func (a *Asker) Ask(ctx context.Context, question, model string) (*Answer, error
 	model, err := a.resolveModel(ctx, model)
 	if err != nil {
 		return nil, err
+	}
+
+	if a.config.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, a.config.Timeout)
+		defer cancel()
 	}
 
 	answer, err := a.answer(ctx, question, model)
@@ -163,7 +176,11 @@ func (a *Asker) answer(ctx context.Context, question, model string) (*Answer, er
 	for attempt := 1; attempt <= a.config.MaxAttempts; attempt++ {
 		reply, err := a.generate(ctx, GenerateRequest{Model: model, System: system, Messages: messages}, attempt)
 		if err != nil {
-			return nil, &AskError{Code: CodeLLMUnavailable, Message: err.Error(), SQL: lastSQL(failure), Attempts: attempt, Err: err}
+			message := err.Error()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				message = fmt.Sprintf("no answer within the %s limit for a question (attempt %d): %s", a.config.Timeout, attempt, err)
+			}
+			return nil, &AskError{Code: CodeLLMUnavailable, Message: message, SQL: lastSQL(failure), Attempts: attempt, Err: err}
 		}
 
 		sql, result, failed := a.run(ctx, reply)
