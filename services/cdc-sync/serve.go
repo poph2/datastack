@@ -28,6 +28,7 @@ const (
 	flagPollInterval       = "poll-interval"
 	flagBatchSize          = "batch-size"
 	flagSafetyLag          = "safety-lag"
+	flagSchemaRefresh      = "schema-refresh-interval"
 
 	defaultTables = "customers.customers,marketing.campaigns,marketing.attributions," +
 		"inventory.inventory,payments.payments,shipments.shipments,orders.orders"
@@ -58,6 +59,7 @@ func newServeCommand(v *viper.Viper) *cobra.Command {
 	flags.Duration(flagPollInterval, 5*time.Second, "time between polls of a caught-up table")
 	flags.Int(flagBatchSize, 1000, "most rows read and loaded per batch")
 	flags.Duration(flagSafetyLag, 2*time.Second, "leave rows changed more recently than this for a later poll")
+	flags.Duration(flagSchemaRefresh, time.Minute, "time between re-reads of each source schema, which carry changed comments into StarRocks")
 	return cmd
 }
 
@@ -114,9 +116,10 @@ func serve(ctx context.Context, v *viper.Viper) error {
 		Tracker: tracker,
 		Logger:  logger,
 	}, cdc.SyncConfig{
-		PollInterval: v.GetDuration(flagPollInterval),
-		BatchSize:    v.GetInt(flagBatchSize),
-		SafetyLag:    v.GetDuration(flagSafetyLag),
+		PollInterval:          v.GetDuration(flagPollInterval),
+		BatchSize:             v.GetInt(flagBatchSize),
+		SafetyLag:             v.GetDuration(flagSafetyLag),
+		SchemaRefreshInterval: v.GetDuration(flagSchemaRefresh),
 	})
 	if err != nil {
 		return err

@@ -31,7 +31,9 @@ var tracer = otel.Tracer("cdc-sync")
 // *StarRocksCatalog implements it, and tests fake it.
 type Catalog interface {
 	// EnsureTable creates the target table, or adds columns it lacks.
-	EnsureTable(ctx context.Context, table string, columns []Column) error
+	EnsureTable(ctx context.Context, table string, schema TableSchema) error
+	// SyncComments brings an existing table's comments in line with schema.
+	SyncComments(ctx context.Context, table string, schema TableSchema) (CommentChanges, error)
 	// MaxUpdatedAt returns the newest updated_at loaded, zero when empty.
 	MaxUpdatedAt(ctx context.Context, table string) (time.Time, error)
 }
@@ -44,6 +46,10 @@ type SyncConfig struct {
 	BatchSize int
 	// SafetyLag leaves rows changed this recently for a later poll.
 	SafetyLag time.Duration
+	// SchemaRefreshInterval is how often a running table re-reads its source
+	// schema, so changed comments reach StarRocks (and comment changes that
+	// StarRocks refused while a schema change ran are retried).
+	SchemaRefreshInterval time.Duration
 }
 
 func (c SyncConfig) validate() error {
@@ -55,6 +61,9 @@ func (c SyncConfig) validate() error {
 	}
 	if c.SafetyLag < 0 {
 		return fmt.Errorf("safety lag must not be negative, got %s", c.SafetyLag)
+	}
+	if c.SchemaRefreshInterval <= 0 {
+		return fmt.Errorf("schema refresh interval must be positive, got %s", c.SchemaRefreshInterval)
 	}
 	return nil
 }
@@ -109,10 +118,12 @@ type tableSyncer struct {
 	config SyncConfig
 	logger *slog.Logger
 
-	ready      bool
-	cursor     Cursor
-	columns    map[string]bool
-	setupError string
+	ready             bool
+	cursor            Cursor
+	columns           map[string]bool
+	setupError        string
+	nextSchemaRefresh time.Time
+	keyCommentNoted   bool
 }
 
 func (t *tableSyncer) run(ctx context.Context) {
@@ -129,14 +140,16 @@ func (t *tableSyncer) run(ctx context.Context) {
 	}
 }
 
-// tick sets the table up if it isn't yet, drains every pending change, and
-// refreshes the lag gauge.
+// tick sets the table up if it isn't yet (or refreshes its schema when that
+// is due), drains every pending change, and refreshes the lag gauge.
 func (t *tableSyncer) tick(ctx context.Context) {
 	if !t.ready {
 		if err := t.setup(ctx); err != nil {
 			t.setupFailed(ctx, err)
 			return
 		}
+	} else if !time.Now().Before(t.nextSchemaRefresh) {
+		t.refreshSchema(ctx)
 	}
 	t.drain(ctx)
 	t.updateLag(ctx)
@@ -168,23 +181,67 @@ func (t *tableSyncer) setup(ctx context.Context) error {
 	return nil
 }
 
+// syncSchema mirrors the source columns into StarRocks, then its comments.
+// Only the columns can fail it: comments are documentation, and never worth
+// holding up a load.
 func (t *tableSyncer) syncSchema(ctx context.Context) error {
-	columns, err := t.deps.Sources.Columns(ctx, t.ref)
+	t.nextSchemaRefresh = time.Now().Add(t.config.SchemaRefreshInterval)
+
+	schema, err := t.deps.Sources.Schema(ctx, t.ref)
 	if err != nil {
 		return err
 	}
-	if err := validateCursorColumns(columns); err != nil {
+	if err := validateCursorColumns(schema.Columns); err != nil {
 		return fmt.Errorf("%s: %w", t.ref, err)
 	}
-	if err := t.deps.Catalog.EnsureTable(ctx, t.ref.Table, columns); err != nil {
+	if err := t.deps.Catalog.EnsureTable(ctx, t.ref.Table, schema); err != nil {
 		return err
 	}
 
 	t.columns = map[string]bool{}
-	for _, c := range columns {
+	for _, c := range schema.Columns {
 		t.columns[c.Name] = true
 	}
+	t.syncComments(ctx, schema)
 	return nil
+}
+
+// refreshSchema re-mirrors the schema of a table that is already syncing. A
+// failure is only logged: rows keep loading, and the next refresh retries.
+func (t *tableSyncer) refreshSchema(ctx context.Context) {
+	if err := t.syncSchema(ctx); err != nil && ctx.Err() == nil {
+		t.logger.WarnContext(ctx, "refreshing schema failed, retrying on the next refresh", "error", err)
+	}
+}
+
+// syncComments carries comment changes into StarRocks. A schema change still
+// running (right after an ADD COLUMN or an earlier comment change) makes
+// StarRocks refuse them; that is expected, so it is logged at INFO and left
+// to the next refresh like any other failure here.
+func (t *tableSyncer) syncComments(ctx context.Context, schema TableSchema) {
+	changes, err := t.deps.Catalog.SyncComments(ctx, t.ref.Table, schema)
+	t.deps.Tracker.setCommentsInSync(t.ref, err == nil)
+	t.noteKeyComment(ctx, changes.KeyCommentDiffers)
+
+	switch {
+	case ctx.Err() != nil:
+	case isSchemaChangeInProgress(err):
+		t.logger.InfoContext(ctx, "schema change in progress, syncing comments on the next refresh",
+			"retry_in", t.config.SchemaRefreshInterval)
+	case err != nil:
+		t.logger.WarnContext(ctx, "syncing comments failed, retrying on the next refresh", "error", err)
+	case len(changes.Statements) > 0:
+		t.logger.InfoContext(ctx, "comments synced", "statements", len(changes.Statements))
+	}
+}
+
+// noteKeyComment logs once that id's comment is out of date, rather than on
+// every refresh.
+func (t *tableSyncer) noteKeyComment(ctx context.Context, differs bool) {
+	if differs && !t.keyCommentNoted {
+		t.logger.InfoContext(ctx, "id comment differs from Postgres and is left as is: changing a key column would start a full schema change job")
+	}
+	t.keyCommentNoted = differs
 }
 
 // setupFailed reports a table that can't sync yet. That is expected while

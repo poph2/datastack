@@ -53,30 +53,32 @@ flowchart LR
 
 Before a table's first poll, its loop:
 
-1. Reads the source's columns from `information_schema.columns`, in ordinal order. The table must have `id` and `updated_at`.
+1. Reads the source's columns from `information_schema.columns`, in ordinal order, together with the table and column comments (`obj_description` / `col_description`, see [comments](#comments--semantic-context)). The table must have `id` and `updated_at`.
 2. Runs `CREATE DATABASE IF NOT EXISTS analytics_db` and, if the target is missing, creates it as a **Primary Key** table keyed on `id`:
 
    ```sql
    CREATE TABLE IF NOT EXISTS `analytics_db`.`inventory` (
-     `id` BIGINT NOT NULL,
-     `created_at` DATETIME NULL,
-     `updated_at` DATETIME NULL,
-     `deleted_at` DATETIME NULL,
-     `product_id` VARCHAR(200) NULL,
+     `id` BIGINT NOT NULL COMMENT 'Surrogate key',
+     `created_at` DATETIME NULL COMMENT 'When the row was created, in UTC',
+     `updated_at` DATETIME NULL COMMENT 'When the row last changed, in UTC',
+     `deleted_at` DATETIME NULL COMMENT 'When the row was soft-deleted. NULL for live rows',
+     `product_id` VARCHAR(200) NULL COMMENT 'Product SKU',
      `category` VARCHAR(200) NULL,
      `stock_level` BIGINT NULL,
      `price` DECIMAL(10,2) NULL,
      `auto_restock` BOOLEAN NULL
    ) PRIMARY KEY (`id`)
+   COMMENT 'Stock on hand, one row per product'
    DISTRIBUTED BY HASH(`id`)
    PROPERTIES ("replication_num" = "1")
    ```
 
-   `id` always comes first (StarRocks requires key columns first). Every other column is nullable.
-3. If the target exists, adds any column it lacks in **one** `ALTER TABLE ... ADD COLUMN (...)`. StarRocks runs schema changes as background jobs and refuses a second one while the first runs, so one ALTER per column would fail. Like GORM's AutoMigrate, this only ever adds columns. A dropped or retyped Postgres column is left alone (drop the StarRocks table to rebuild it).
-4. Reads its starting cursor from StarRocks (see [stateless cursors](#2-stateless-cursors)).
+   `id` always comes first (StarRocks requires key columns first). Every other column is nullable. A column or table without a Postgres comment gets no `COMMENT` clause (the comments shown are illustrative).
+3. If the target exists, adds any column it lacks (with its comment) in **one** `ALTER TABLE ... ADD COLUMN (...)`. StarRocks runs schema changes as background jobs and refuses a second one while the first runs, so one ALTER per column would fail. Like GORM's AutoMigrate, this only ever adds columns. A dropped or retyped Postgres column is left alone (drop the StarRocks table to rebuild it).
+4. Brings the comments of an existing target in line with Postgres (see [comments](#comments--semantic-context)). This step never fails setup.
+5. Reads its starting cursor from StarRocks (see [stateless cursors](#2-stateless-cursors)).
 
-The schema is checked again whenever a batch carries a column the loop hasn't seen, so a service that redeploys with a new field gets that column in StarRocks before the next load.
+The schema is checked again whenever a batch carries a column the loop hasn't seen, so a service that redeploys with a new field gets that column in StarRocks before the next load, and every `SCHEMA_REFRESH_INTERVAL` (1 minute), so changed comments arrive without a restart.
 
 Type map ([`schema.go`](../../services/cdc-sync/internal/cdc/schema.go), a pure, unit-tested function):
 
@@ -161,6 +163,36 @@ Services are deployed one at a time, so the daemon starts happily with nothing t
 - If a source disappears after setup (`undefined_table` / `invalid_catalog_name`), the loop goes back through setup.
 - `/readyz` reports ready once StarRocks answers on the MySQL port. It never blocks the process from starting.
 
+## Comments / Semantic Context
+
+The services document their tables in Postgres with `COMMENT ON TABLE` and `COMMENT ON COLUMN` (set by GORM AutoMigrate from the models). The sync carries those comments into StarRocks, because StarRocks' `information_schema` is where the semantic analyzer reads what each table and column means when it generates SQL:
+
+```sql
+SELECT table_name, table_comment FROM information_schema.tables  WHERE table_schema = 'analytics_db';
+SELECT table_name, column_name, column_type, column_comment
+  FROM information_schema.columns WHERE table_schema = 'analytics_db';
+```
+
+Column comments may carry join markers such as `[ref: customers.id]`; they arrive verbatim, so the analyzer can build its join graph from `column_comment` alone. Comments are plain text: they are emitted as StarRocks string literals with `\` and `'` escaped, never pasted into DDL raw.
+
+How they get there:
+
+| Situation | DDL |
+|---|---|
+| Target missing | `CREATE TABLE` with `COMMENT '...'` on each commented column and a table `COMMENT '...'` between `PRIMARY KEY (...)` and `DISTRIBUTED BY` |
+| New source column | `ALTER TABLE ... ADD COLUMN (c <type> NULL COMMENT '...', ...)` |
+| Table comment differs | `ALTER TABLE analytics_db.orders COMMENT = '...'` (instant) |
+| Column comments differ | **one** `ALTER TABLE analytics_db.orders MODIFY COLUMN a <type> NULL COMMENT '...', MODIFY COLUMN b <type> NULL COMMENT '...'` for every changed non-key column |
+| `id` comment differs | nothing: logged once at INFO and left as is |
+
+The comparison reads the current comments from StarRocks' `information_schema`, so it is stateless like the cursor, and a comment removed in Postgres is cleared (`COMMENT ''`). `MODIFY COLUMN` repeats the type from the same [type map](#1-setup-schemas-are-reflected-from-postgres) the column was created with, so only the comment changes.
+
+Schema-change behaviour:
+
+- In StarRocks `COMMENT =` is instant, but `MODIFY COLUMN` queues a full **asynchronous schema change job**, and while one runs every other `ALTER` on that table fails with *"A schema change operation is in progress on the table"*. That is why all column comments go in one statement, why the key column is never modified (a key-column job isn't worth a comment), and why an `ADD COLUMN` (itself a job) is always run before the comments.
+- Comment reconciliation **never stops loading**. A refused comment change is logged at INFO (schema change in progress) or WARN (anything else) and retried at the next schema refresh; Stream Loads keep running during the job. `/status` shows `comments_in_sync: false` until it succeeds.
+- One edge remains: if a *new column* appears while a comment job is still running, its `ADD COLUMN` is refused and that table's loads wait (as for any new column) until the job finishes, usually seconds. Loading the batch without the column would silently drop its values.
+
 ## Configuration
 
 Every flag can also be set as an environment variable (`--batch-size` ↔ `BATCH_SIZE`).
@@ -178,6 +210,7 @@ Every flag can also be set as an environment variable (`--batch-size` ↔ `BATCH
 | `--poll-interval` / `POLL_INTERVAL` | `5s` | Time between polls of a caught-up table |
 | `--batch-size` / `BATCH_SIZE` | `1000` | Rows per batch |
 | `--safety-lag` / `SAFETY_LAG` | `2s` | Rows changed more recently wait for a later poll |
+| `--schema-refresh-interval` / `SCHEMA_REFRESH_INTERVAL` | `1m` | How often each table re-reads its source schema, carrying changed comments (and retrying refused comment changes) |
 | `--log-level`, `--log-format`, `OTEL_EXPORTER_OTLP_ENDPOINT` | | As for every service |
 
 ## Running It
@@ -237,7 +270,8 @@ Lag is measured every tick with `SELECT MAX(updated_at)` on the source. With con
     "rows_synced": 18342,
     "last_success_at": "2026-10-08T12:05:03.2Z",
     "last_error": "",
-    "lag_seconds": 2.4
+    "lag_seconds": 2.4,
+    "comments_in_sync": true
   },
   {
     "table": "shipments.shipments",
@@ -246,12 +280,13 @@ Lag is measured every tick with `SELECT MAX(updated_at)` on the source. With con
     "rows_synced": 0,
     "last_success_at": null,
     "last_error": "reading columns of shipments.shipments: failed to connect to `user=app database=shipments`: ... database \"shipments\" does not exist",
-    "lag_seconds": 0
+    "lag_seconds": 0,
+    "comments_in_sync": false
   }
 ]
 ```
 
-`rows_synced` counts rows since this process started (re-sent boundary rows included). `last_error` clears on the next success.
+`rows_synced` counts rows since this process started (re-sent boundary rows included). `last_error` clears on the next success. `comments_in_sync` is true once the last comment reconciliation found (or made) the StarRocks table and column comments equal to Postgres' (the `id` comment excepted).
 
 ## Deployment Notes
 

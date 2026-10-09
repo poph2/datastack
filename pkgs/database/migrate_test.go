@@ -82,3 +82,52 @@ func TestWithMigrationLockSerialisesRuns(t *testing.T) {
 	require.NoError(t, <-done)
 	assert.EqualValues(t, 1, maxActive.Load())
 }
+
+type documented struct {
+	database.Model
+	Name string `gorm:"comment:Display name, with quotes \"like this\" and [ref: widgets.id]"`
+	Note string
+}
+
+func (documented) TableComment() string { return "One row per documented thing. Isn't it nice." }
+
+type documentedV2 struct {
+	database.Model
+	Name string `gorm:"comment:Renamed meaning."`
+	Note string `gorm:"comment:Now documented."`
+}
+
+func (documentedV2) TableName() string    { return "documenteds" }
+func (documentedV2) TableComment() string { return "Second version." }
+
+func TestCommentsReachPostgres(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, pgtest.Start(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close(db) })
+
+	require.NoError(t, database.AutoMigrate(ctx, db, &documented{}))
+
+	comment := func(sql string) string {
+		var c string
+		require.NoError(t, db.Raw(sql).Scan(&c).Error)
+		return c
+	}
+	assert.Equal(t, "One row per documented thing. Isn't it nice.",
+		comment("SELECT obj_description('documenteds'::regclass, 'pg_class')"), "quotes survive")
+	assert.Equal(t, `Display name, with quotes "like this" and [ref: widgets.id]`,
+		comment("SELECT col_description('documenteds'::regclass, 2 + 3)"), "column order: id, created_at, updated_at, deleted_at, name")
+	assert.Contains(t, comment("SELECT col_description('documenteds'::regclass, 1)"), "primary key", "base Model columns are documented")
+
+	missing, err := database.Undocumented(ctx, db)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"documenteds.note"}, missing)
+
+	// Changing a comment and re-migrating updates it in place.
+	require.NoError(t, database.AutoMigrate(ctx, db, &documentedV2{}))
+	assert.Equal(t, "Second version.", comment("SELECT obj_description('documenteds'::regclass, 'pg_class')"))
+	assert.Equal(t, "Renamed meaning.", comment("SELECT col_description('documenteds'::regclass, 5)"))
+	missing, err = database.Undocumented(ctx, db)
+	require.NoError(t, err)
+	assert.Empty(t, missing)
+}

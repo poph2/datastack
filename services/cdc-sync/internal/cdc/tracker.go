@@ -14,6 +14,10 @@ type TableStatus struct {
 	LastSuccessAt   *time.Time `json:"last_success_at"`
 	LastError       string     `json:"last_error"`
 	LagSeconds      float64    `json:"lag_seconds"`
+	// CommentsInSync is true once the StarRocks table and column comments
+	// were last found (or made) equal to Postgres'. The id comment is never
+	// changed, so it doesn't count.
+	CommentsInSync bool `json:"comments_in_sync"`
 }
 
 // Tracker records every table loop's progress. The loops write to it and the
@@ -68,6 +72,10 @@ func (t *Tracker) recordError(ref TableRef, err error) {
 
 func (t *Tracker) clearError(ref TableRef) {
 	t.update(ref, func(s *TableStatus) { s.LastError = "" })
+}
+
+func (t *Tracker) setCommentsInSync(ref TableRef, inSync bool) {
+	t.update(ref, func(s *TableStatus) { s.CommentsInSync = inSync })
 }
 
 func (t *Tracker) setLag(ref TableRef, lag time.Duration) {

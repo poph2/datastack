@@ -28,8 +28,9 @@ type widget struct {
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// fastSync syncs everything already committed, with no safety lag.
-var fastSync = SyncConfig{PollInterval: time.Second, BatchSize: 1000, SafetyLag: 0}
+// fastSync syncs everything already committed, with no safety lag. Schema
+// refreshes are forced explicitly by the tests that need them.
+var fastSync = SyncConfig{PollInterval: time.Second, BatchSize: 1000, SafetyLag: 0, SchemaRefreshInterval: time.Hour}
 
 // harness is one source database with a widgets table, a fake StarRocks and
 // a single table loop driven tick by tick.
@@ -95,6 +96,20 @@ func (h *harness) status() TableStatus {
 	return h.tracker.Snapshot()[0]
 }
 
+// comment runs COMMENT ON statements against the source, as GORM
+// AutoMigrate does for documented models.
+func (h *harness) comment(t *testing.T, statements ...string) {
+	t.Helper()
+	for _, statement := range statements {
+		require.NoError(t, h.db.Exec(statement).Error)
+	}
+}
+
+// refreshNow makes the next tick re-read the source schema.
+func refreshNow(s *tableSyncer) {
+	s.nextSchemaRefresh = time.Time{}
+}
+
 func withDatabase(t *testing.T, serverURL, dbName string) string {
 	t.Helper()
 	u, err := url.Parse(serverURL)
@@ -153,7 +168,7 @@ func TestSync(t *testing.T) {
 		require.NoError(t, h.db.Raw("SELECT COUNT(DISTINCT updated_at) FROM widgets").Scan(&distinct).Error)
 		require.Equal(t, 1, distinct, "precondition: every row has the same updated_at")
 
-		h.syncer(t, SyncConfig{PollInterval: time.Second, BatchSize: 2}).tick(ctx)
+		h.syncer(t, SyncConfig{PollInterval: time.Second, BatchSize: 2, SchemaRefreshInterval: time.Hour}).tick(ctx)
 
 		rows, deliveries, labels := h.starrock.stats()
 		assert.Equal(t, 5, rows)
@@ -218,7 +233,7 @@ func TestSync(t *testing.T) {
 		h := newHarness(t, serverURL, "safety_lag")
 		h.insertWidgets(t, 2)
 
-		h.syncer(t, SyncConfig{PollInterval: time.Second, BatchSize: 1000, SafetyLag: time.Hour}).tick(ctx)
+		h.syncer(t, SyncConfig{PollInterval: time.Second, BatchSize: 1000, SafetyLag: time.Hour, SchemaRefreshInterval: time.Hour}).tick(ctx)
 
 		rows, _, _ := h.starrock.stats()
 		assert.Zero(t, rows, "rows changed within the safety lag wait for a later poll")
@@ -282,5 +297,80 @@ func TestSync(t *testing.T) {
 		assert.Empty(t, h.status().LastError)
 		assert.Equal(t, "colour", h.starrock.columns[len(h.starrock.columns)-1].Name)
 		assert.Equal(t, "red", h.starrock.row(1)["colour"])
+	})
+
+	t.Run("carries Postgres comments into the new table", func(t *testing.T) {
+		h := newHarness(t, serverURL, "comments_create")
+		h.comment(t,
+			`COMMENT ON TABLE widgets IS 'Widgets for sale, one per SKU: "w" prefix'`,
+			`COMMENT ON COLUMN widgets.id IS 'Widget id'`,
+			`COMMENT ON COLUMN widgets.name IS 'Display name [ref: catalog.name]'`)
+
+		h.syncer(t, fastSync).tick(ctx)
+
+		statements := h.starrock.statements()
+		require.Len(t, statements, 1, "a new table needs only its CREATE")
+		assert.Contains(t, statements[0], "`id` BIGINT NOT NULL COMMENT 'Widget id'")
+		assert.Contains(t, statements[0], "`name` VARCHAR(200) NULL COMMENT 'Display name [ref: catalog.name]'")
+		assert.Contains(t, statements[0], "`price` DECIMAL(10,2) NULL\n)", "uncommented columns have no COMMENT")
+		assert.Contains(t, statements[0], ") PRIMARY KEY (`id`)\nCOMMENT 'Widgets for sale, one per SKU: \"w\" prefix'\nDISTRIBUTED BY")
+		assert.True(t, h.status().CommentsInSync)
+	})
+
+	t.Run("a changed comment is reconciled on the next schema refresh", func(t *testing.T) {
+		h := newHarness(t, serverURL, "comments_change")
+		h.comment(t, `COMMENT ON COLUMN widgets.name IS 'old'`)
+		s := h.syncer(t, fastSync)
+		s.tick(ctx)
+
+		h.comment(t,
+			`COMMENT ON TABLE widgets IS 'Widgets'`,
+			`COMMENT ON COLUMN widgets.name IS 'Display name'`,
+			`COMMENT ON COLUMN widgets.price IS 'Unit price, USD'`,
+			`COMMENT ON COLUMN widgets.id IS 'Widget id'`)
+		s.tick(ctx)
+		assert.Len(t, h.starrock.statements(), 1, "nothing changes before the refresh is due")
+
+		refreshNow(s)
+		s.tick(ctx)
+
+		assert.Equal(t, []string{
+			"ALTER TABLE `analytics_db`.`widgets` COMMENT = 'Widgets'",
+			"ALTER TABLE `analytics_db`.`widgets` " +
+				"MODIFY COLUMN `name` VARCHAR(200) NULL COMMENT 'Display name', " +
+				"MODIFY COLUMN `price` DECIMAL(10,2) NULL COMMENT 'Unit price, USD'",
+		}, h.starrock.statements()[1:], "id's comment is left alone")
+		assert.True(t, h.status().CommentsInSync)
+
+		refreshNow(s)
+		s.tick(ctx)
+		assert.Len(t, h.starrock.statements(), 3, "comments in sync: nothing more to do")
+	})
+
+	t.Run("a schema change in progress never stops rows loading", func(t *testing.T) {
+		h := newHarness(t, serverURL, "comments_busy")
+		h.insertWidgets(t, 2)
+		s := h.syncer(t, fastSync)
+		s.tick(ctx)
+
+		h.comment(t, `COMMENT ON COLUMN widgets.name IS 'Display name'`)
+		h.starrock.setSchemaChangeRunning(true)
+		h.insertWidgets(t, 3)
+		refreshNow(s)
+		s.tick(ctx)
+
+		rows, _, _ := h.starrock.stats()
+		assert.Equal(t, 5, rows, "rows load while the comment change waits")
+		assert.Empty(t, h.status().LastError)
+		assert.False(t, h.status().CommentsInSync)
+		assert.Len(t, h.starrock.statements(), 1, "only the CREATE ran")
+
+		h.starrock.setSchemaChangeRunning(false)
+		refreshNow(s)
+		s.tick(ctx)
+
+		assert.Equal(t, "ALTER TABLE `analytics_db`.`widgets` MODIFY COLUMN `name` VARCHAR(200) NULL COMMENT 'Display name'",
+			h.starrock.statements()[1], "retried on the next refresh")
+		assert.True(t, h.status().CommentsInSync)
 	})
 }

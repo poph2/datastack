@@ -22,6 +22,7 @@ func TestStatusEndpoint(t *testing.T) {
 	cursor := Cursor{UpdatedAt: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), ID: 42}
 	tracker.recordLoad(orders, cursor, 10, time.Date(2026, 10, 8, 12, 0, 3, 0, time.UTC))
 	tracker.setLag(orders, 1500*time.Millisecond)
+	tracker.setCommentsInSync(orders, true)
 	tracker.recordError(customers, errors.New("source table does not exist"))
 
 	router := httpserver.NewRouter(httpserver.RouterConfig{
@@ -36,8 +37,10 @@ func TestStatusEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `[
 		{"table": "orders.orders", "cursor_updated_at": "2026-10-08T12:00:00Z", "cursor_id": 42,
-		 "rows_synced": 10, "last_success_at": "2026-10-08T12:00:03Z", "last_error": "", "lag_seconds": 1.5},
+		 "rows_synced": 10, "last_success_at": "2026-10-08T12:00:03Z", "last_error": "", "lag_seconds": 1.5,
+		 "comments_in_sync": true},
 		{"table": "customers.customers", "cursor_updated_at": "0001-01-01T00:00:00Z", "cursor_id": 0,
-		 "rows_synced": 0, "last_success_at": null, "last_error": "source table does not exist", "lag_seconds": 0}
+		 "rows_synced": 0, "last_success_at": null, "last_error": "source table does not exist", "lag_seconds": 0,
+		 "comments_in_sync": false}
 	]`, rec.Body.String())
 }

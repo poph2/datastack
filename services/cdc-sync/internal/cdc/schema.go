@@ -42,6 +42,30 @@ type Column struct {
 	// numeric columns, 0 when unconstrained.
 	Precision int
 	Scale     int
+	// Comment is the column's COMMENT ON COLUMN text, "" when it has none.
+	Comment string
+}
+
+// TableSchema is a source table as reflected from Postgres: its columns in
+// declared order and its COMMENT ON TABLE text ("" when it has none). The
+// comments are carried into StarRocks so information_schema there documents
+// each table, column and join for anyone generating SQL against it.
+type TableSchema struct {
+	Comment string
+	Columns []Column
+}
+
+// targetTable is what StarRocks already holds for a table, as read from its
+// information_schema.
+type targetTable struct {
+	Comment string
+	// Columns maps each lower-cased column name to its comment. Empty means
+	// the table doesn't exist yet.
+	Columns map[string]string
+}
+
+func (t targetTable) exists() bool {
+	return len(t.Columns) > 0
 }
 
 // starRocksType maps a Postgres column to the StarRocks type it is stored as.
@@ -102,18 +126,19 @@ func validateCursorColumns(columns []Column) error {
 	return nil
 }
 
-// schemaStatements returns the StarRocks DDL that makes database.table match
-// the source columns. existing holds the (lower-cased) column names the
-// target already has: empty means the table doesn't exist yet. Like GORM's
-// AutoMigrate it only ever adds, never drops or alters, columns.
-func schemaStatements(database, table string, source []Column, existing map[string]bool) []string {
-	if len(existing) == 0 {
-		return []string{createTableSQL(database, table, source)}
+// structureStatements returns the StarRocks DDL that gives database.table
+// every source column: a CREATE TABLE (with all comments) when the target
+// doesn't exist yet, otherwise one ADD COLUMN for whatever it lacks. Like
+// GORM's AutoMigrate it only ever adds, never drops or alters, columns.
+// Comments on existing columns are commentChanges' job.
+func structureStatements(database, table string, desired TableSchema, current targetTable) []string {
+	if !current.exists() {
+		return []string{createTableSQL(database, table, desired)}
 	}
 
 	var missing []Column
-	for _, c := range source {
-		if !existing[strings.ToLower(c.Name)] {
+	for _, c := range desired.Columns {
+		if _, ok := current.Columns[strings.ToLower(c.Name)]; !ok {
 			missing = append(missing, c)
 		}
 	}
@@ -130,18 +155,35 @@ func createDatabaseSQL(database string) string {
 // createTableSQL builds a Primary Key table keyed on id, so a re-sent row
 // upserts in place. That is what makes at-least-once delivery safe.
 // StarRocks requires key columns first, so id leads.
-func createTableSQL(database, table string, columns []Column) string {
-	defs := []string{quoteIdent(columnID) + " BIGINT NOT NULL"}
-	for _, c := range columns {
+// The table COMMENT has to sit between the key clause and DISTRIBUTED BY.
+func createTableSQL(database, table string, schema TableSchema) string {
+	defs := []string{keyColumnDefinition(schema.Columns)}
+	for _, c := range schema.Columns {
 		if c.Name != columnID {
 			defs = append(defs, columnDefinition(c))
 		}
 	}
 
-	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s (\n  %s\n) PRIMARY KEY (%s)\nDISTRIBUTED BY HASH(%s)\nPROPERTIES (\"replication_num\" = \"1\")",
+	tableComment := ""
+	if schema.Comment != "" {
+		tableComment = "\nCOMMENT " + quoteString(schema.Comment)
+	}
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s (\n  %s\n) PRIMARY KEY (%s)%s\nDISTRIBUTED BY HASH(%s)\nPROPERTIES (\"replication_num\" = \"1\")",
 		quoteIdent(database), quoteIdent(table),
 		strings.Join(defs, ",\n  "),
-		quoteIdent(columnID), quoteIdent(columnID))
+		quoteIdent(columnID), tableComment, quoteIdent(columnID))
+}
+
+// keyColumnDefinition defines id, the only NOT NULL column, with the source
+// id's comment if it has one.
+func keyColumnDefinition(columns []Column) string {
+	definition := quoteIdent(columnID) + " BIGINT NOT NULL"
+	for _, c := range columns {
+		if c.Name == columnID {
+			return definition + commentClause(c.Comment)
+		}
+	}
+	return definition
 }
 
 // addColumnsSQL adds every missing column in one statement. StarRocks runs
@@ -159,10 +201,31 @@ func addColumnsSQL(database, table string, columns []Column) string {
 // columnDefinition leaves every non-key column nullable: soft-delete columns
 // are NULL for live rows, and nullability never blocks a load.
 func columnDefinition(c Column) string {
+	return columnTypeDefinition(c) + commentClause(c.Comment)
+}
+
+func columnTypeDefinition(c Column) string {
 	return quoteIdent(c.Name) + " " + starRocksType(c) + " NULL"
+}
+
+// commentClause is empty for an uncommented column, so DDL stays as short as
+// it was before comments were carried over.
+func commentClause(comment string) string {
+	if comment == "" {
+		return ""
+	}
+	return " COMMENT " + quoteString(comment)
 }
 
 // quoteIdent quotes a StarRocks (MySQL-dialect) identifier.
 func quoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// quoteString quotes a StarRocks string literal. Backslash is StarRocks'
+// escape character, so it is escaped before the quote is.
+func quoteString(text string) string {
+	escaped := strings.ReplaceAll(text, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
 }

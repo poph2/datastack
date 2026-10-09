@@ -55,13 +55,18 @@ type Payment struct {
 	// any number of DECLINED attempts but at most one SUCCESS, even when
 	// concurrent requests race. A refunded payment no longer counts, so the
 	// order can be charged again.
-	OrderID uint64          `gorm:"not null;uniqueIndex:idx_payments_order_id_success,where:status = 'SUCCESS' AND deleted_at IS NULL"`
-	Amount  decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_payments_amount,amount > 0"`
-	Method  Method          `gorm:"size:20;not null;check:chk_payments_method,method IN ('CREDIT_CARD','PAYPAL')"`
-	Status  Status          `gorm:"size:20;not null;check:chk_payments_status,status IN ('SUCCESS','DECLINED','REFUNDED')"`
-	// Set if and only if the payment was declined. The CHECK enforces both the
+	OrderID uint64          `gorm:"not null;uniqueIndex:idx_payments_order_id_success,where:status = 'SUCCESS' AND deleted_at IS NULL;comment:Order being paid for. [ref: orders.id]"`
+	Amount  decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_payments_amount,amount > 0;comment:Amount charged or attempted, in USD. Equals the total_amount of the order."`
+	Method  Method          `gorm:"size:20;not null;check:chk_payments_method,method IN ('CREDIT_CARD','PAYPAL');comment:Payment method: CREDIT_CARD or PAYPAL."`
+	Status  Status          `gorm:"size:20;not null;check:chk_payments_status,status IN ('SUCCESS','DECLINED','REFUNDED');comment:Outcome: SUCCESS (money captured), DECLINED (see decline_reason) or REFUNDED (a previously successful payment that was refunded)."`
 	// allowed values and that pairing.
-	DeclineReason *DeclineReason `gorm:"size:50;check:chk_payments_decline_reason,(decline_reason IS NOT NULL) = (status = 'DECLINED') AND (decline_reason IS NULL OR decline_reason IN ('CARD_DECLINED','INSUFFICIENT_FUNDS','FRAUD_SUSPECTED'))"`
+	DeclineReason *DeclineReason `gorm:"size:50;check:chk_payments_decline_reason,(decline_reason IS NOT NULL) = (status = 'DECLINED') AND (decline_reason IS NULL OR decline_reason IN ('CARD_DECLINED','INSUFFICIENT_FUNDS','FRAUD_SUSPECTED'));comment:Why the payment was declined, set only when status is DECLINED: CARD_DECLINED, INSUFFICIENT_FUNDS or FRAUD_SUSPECTED. NULL otherwise."`
+}
+
+// TableComment documents the table for the semantic layer (see
+// database.TableCommenter).
+func (Payment) TableComment() string {
+	return "Payment attempts (Payment Service): one row per charge attempt, declined attempts included. An order has at most one SUCCESS payment and may have several DECLINED ones. Join payments.order_id to orders.id. Cleared revenue is the sum of amount where status is SUCCESS. Declined amount is revenue lost to payment failures."
 }
 
 // Migrate creates or updates the Payment Service schema. There is no seed

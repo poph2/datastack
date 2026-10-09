@@ -127,3 +127,15 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	// A second run, as on every redeploy, must change nothing and not fail.
 	require.NoError(t, Migrate(context.Background(), db))
 }
+
+// The semantic layer (text-to-SQL) reads table and column comments from
+// StarRocks, which copies them from Postgres. Every table and column must be
+// documented, so a new field can't ship without a `comment:` tag.
+func TestSchemaIsFullyDocumented(t *testing.T) {
+	_, db := newTestRepository(t)
+
+	missing, err := database.Undocumented(context.Background(), db)
+
+	require.NoError(t, err)
+	assert.Empty(t, missing, "add a comment: tag (columns) or TableComment (tables)")
+}

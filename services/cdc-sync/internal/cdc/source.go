@@ -15,15 +15,22 @@ import (
 // table loop and its lag query never need more.
 const maxConnsPerDatabase = 2
 
-// columnsQuery reflects a table's columns in their declared order.
+// columnsQuery reflects a table's columns in their declared order, with each
+// column's comment and, repeated on every row, the table's comment.
+// information_schema has no comments, so it is joined to pg_class for the
+// table's oid; ordinal_position is the column's attnum.
 const columnsQuery = `
-SELECT column_name, data_type,
-       COALESCE(character_maximum_length, 0),
-       COALESCE(numeric_precision, 0),
-       COALESCE(numeric_scale, 0)
-  FROM information_schema.columns
- WHERE table_schema = current_schema() AND table_name = $1
- ORDER BY ordinal_position`
+SELECT col.column_name, col.data_type,
+       COALESCE(col.character_maximum_length, 0),
+       COALESCE(col.numeric_precision, 0),
+       COALESCE(col.numeric_scale, 0),
+       COALESCE(col_description(cls.oid, col.ordinal_position::int), ''),
+       COALESCE(obj_description(cls.oid, 'pg_class'), '')
+  FROM information_schema.columns col
+  JOIN pg_catalog.pg_namespace ns ON ns.nspname = col.table_schema
+  JOIN pg_catalog.pg_class cls ON cls.relnamespace = ns.oid AND cls.relname = col.table_name
+ WHERE col.table_schema = current_schema() AND col.table_name = $1
+ ORDER BY col.ordinal_position`
 
 // changedRowsQuery reads the next batch after the cursor. The row-value
 // comparison on (updated_at, id) never skips rows that share the boundary
@@ -116,30 +123,31 @@ func (s *Sources) pool(database string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Columns reflects ref's columns. It returns ErrSourceMissing (wrapped) when
-// the table doesn't exist yet.
-func (s *Sources) Columns(ctx context.Context, ref TableRef) ([]Column, error) {
+// Schema reflects ref's columns and comments. It returns ErrSourceMissing
+// (wrapped) when the table doesn't exist yet.
+func (s *Sources) Schema(ctx context.Context, ref TableRef) (TableSchema, error) {
 	pool, err := s.pool(ref.Database)
 	if err != nil {
-		return nil, err
+		return TableSchema{}, err
 	}
 
 	rows, err := pool.Query(ctx, columnsQuery, ref.Table)
 	if err != nil {
-		return nil, fmt.Errorf("reading columns of %s: %w", ref, err)
+		return TableSchema{}, fmt.Errorf("reading columns of %s: %w", ref, err)
 	}
-	columns, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Column, error) {
+	var schema TableSchema
+	schema.Columns, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Column, error) {
 		var c Column
-		err := row.Scan(&c.Name, &c.DataType, &c.MaxLength, &c.Precision, &c.Scale)
+		err := row.Scan(&c.Name, &c.DataType, &c.MaxLength, &c.Precision, &c.Scale, &c.Comment, &schema.Comment)
 		return c, err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("reading columns of %s: %w", ref, err)
+		return TableSchema{}, fmt.Errorf("reading columns of %s: %w", ref, err)
 	}
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("%s: %w", ref, ErrSourceMissing)
+	if len(schema.Columns) == 0 {
+		return TableSchema{}, fmt.Errorf("%s: %w", ref, ErrSourceMissing)
 	}
-	return columns, nil
+	return schema, nil
 }
 
 // ChangedRows returns up to limit rows after cursor, excluding rows changed

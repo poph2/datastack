@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +17,9 @@ import (
 
 // fakeStarRocks stands in for both sides of StarRocks: an httptest Stream
 // Load endpoint that upserts rows by id like a Primary Key table, and the
-// Catalog (DDL and starting cursor) answered from those same rows.
+// Catalog (DDL and starting cursor) answered from those same rows. The
+// Catalog side plans its DDL with the real pure functions against the
+// table's state, records the statements, and applies them to that state.
 type fakeStarRocks struct {
 	server *httptest.Server
 
@@ -26,7 +30,15 @@ type fakeStarRocks struct {
 	deliveries int                       // rows received by successful loads
 	failNext   int
 	columns    []Column
+	target     targetTable
+	ddl        []string
+	// schemaChangeRunning makes every comment ALTER fail the way StarRocks
+	// refuses one while an earlier schema change job runs.
+	schemaChangeRunning bool
 }
+
+// fakeDatabase is the StarRocks database the fake's DDL names.
+const fakeDatabase = "analytics_db"
 
 func newFakeStarRocks(t *testing.T) *fakeStarRocks {
 	t.Helper()
@@ -37,7 +49,7 @@ func newFakeStarRocks(t *testing.T) *fakeStarRocks {
 }
 
 func (f *fakeStarRocks) loader() *StreamLoader {
-	return NewStreamLoader(StreamLoadConfig{URL: f.server.URL, Database: "analytics_db", User: "root"})
+	return NewStreamLoader(StreamLoadConfig{URL: f.server.URL, Database: fakeDatabase, User: "root"})
 }
 
 func (f *fakeStarRocks) streamLoad(w http.ResponseWriter, r *http.Request) {
@@ -82,11 +94,57 @@ func writeJSON(w http.ResponseWriter, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func (f *fakeStarRocks) EnsureTable(_ context.Context, _ string, columns []Column) error {
+func (f *fakeStarRocks) EnsureTable(_ context.Context, table string, schema TableSchema) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.columns = columns
+
+	f.columns = schema.Columns
+	f.ddl = append(f.ddl, structureStatements(fakeDatabase, table, schema, f.target)...)
+	if !f.target.exists() {
+		f.target = targetTable{Comment: schema.Comment, Columns: map[string]string{}}
+	}
+	for _, c := range schema.Columns {
+		if _, ok := f.target.Columns[strings.ToLower(c.Name)]; !ok {
+			f.target.Columns[strings.ToLower(c.Name)] = c.Comment
+		}
+	}
 	return nil
+}
+
+func (f *fakeStarRocks) SyncComments(_ context.Context, table string, schema TableSchema) (CommentChanges, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	changes := commentChanges(fakeDatabase, table, schema, f.target)
+	if len(changes.Statements) == 0 {
+		return changes, nil
+	}
+	if f.schemaChangeRunning {
+		return changes, errors.New("Error 1064 (HY000): A schema change operation is in progress on the table " + table)
+	}
+
+	f.ddl = append(f.ddl, changes.Statements...)
+	f.target.Comment = schema.Comment
+	for _, c := range schema.Columns {
+		name := strings.ToLower(c.Name)
+		if _, ok := f.target.Columns[name]; ok && c.Name != columnID {
+			f.target.Columns[name] = c.Comment
+		}
+	}
+	return changes, nil
+}
+
+// statements returns every DDL statement run so far.
+func (f *fakeStarRocks) statements() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ddl...)
+}
+
+func (f *fakeStarRocks) setSchemaChangeRunning(running bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.schemaChangeRunning = running
 }
 
 func (f *fakeStarRocks) MaxUpdatedAt(context.Context, string) (time.Time, error) {

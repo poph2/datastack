@@ -20,7 +20,11 @@ const (
 )
 
 const existingColumnsQuery = `
-SELECT LOWER(column_name) FROM information_schema.columns
+SELECT LOWER(column_name), COALESCE(column_comment, '') FROM information_schema.columns
+ WHERE table_schema = ? AND table_name = ?`
+
+const tableCommentQuery = `
+SELECT COALESCE(table_comment, '') FROM information_schema.tables
  WHERE table_schema = ? AND table_name = ?`
 
 // StarRocksConfig locates the FE's MySQL-protocol port, used for DDL and for
@@ -83,22 +87,41 @@ func (c *StarRocksCatalog) Ping(ctx context.Context) error {
 }
 
 // EnsureTable creates the analytics database and table if needed, and adds
-// any source column the table lacks.
-func (c *StarRocksCatalog) EnsureTable(ctx context.Context, table string, columns []Column) error {
+// any source column the table lacks. A new table gets every comment; the
+// comments of an existing one are left to SyncComments.
+func (c *StarRocksCatalog) EnsureTable(ctx context.Context, table string, schema TableSchema) error {
 	if err := c.exec(ctx, createDatabaseSQL(c.database)); err != nil {
 		return err
 	}
 
-	existing, err := c.existingColumns(ctx, table)
+	current, err := c.currentTable(ctx, table)
 	if err != nil {
 		return err
 	}
-	for _, statement := range schemaStatements(c.database, table, columns, existing) {
+	for _, statement := range structureStatements(c.database, table, schema, current) {
 		if err := c.exec(ctx, statement); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// SyncComments brings the table and column comments of an existing table in
+// line with schema. It returns the changes it attempted; on error some of
+// them may not have run, and the next call recomputes what is left.
+func (c *StarRocksCatalog) SyncComments(ctx context.Context, table string, schema TableSchema) (CommentChanges, error) {
+	current, err := c.currentTable(ctx, table)
+	if err != nil {
+		return CommentChanges{}, err
+	}
+
+	changes := commentChanges(c.database, table, schema, current)
+	for _, statement := range changes.Statements {
+		if err := c.exec(ctx, statement); err != nil {
+			return changes, err
+		}
+	}
+	return changes, nil
 }
 
 // MaxUpdatedAt returns the newest updated_at already in table, or the zero
@@ -115,25 +138,44 @@ func (c *StarRocksCatalog) MaxUpdatedAt(ctx context.Context, table string) (time
 	return newest.Time, nil
 }
 
-func (c *StarRocksCatalog) existingColumns(ctx context.Context, table string) (map[string]bool, error) {
+// currentTable reads the target's columns and comments. A table that
+// doesn't exist comes back with no columns.
+func (c *StarRocksCatalog) currentTable(ctx context.Context, table string) (targetTable, error) {
 	ctx, cancel := context.WithTimeout(ctx, starRocksQueryTimeout)
 	defer cancel()
 
+	columns, err := c.columnComments(ctx, table)
+	if err != nil {
+		return targetTable{}, err
+	}
+	current := targetTable{Columns: columns}
+	if !current.exists() {
+		return current, nil
+	}
+
+	if err := c.db.QueryRowContext(ctx, tableCommentQuery, c.database, table).Scan(&current.Comment); err != nil {
+		return targetTable{}, fmt.Errorf("reading comment of starrocks table %s: %w", table, err)
+	}
+	return current, nil
+}
+
+// columnComments maps each lower-cased column name of table to its comment.
+func (c *StarRocksCatalog) columnComments(ctx context.Context, table string) (map[string]string, error) {
 	rows, err := c.db.QueryContext(ctx, existingColumnsQuery, c.database, table)
 	if err != nil {
 		return nil, fmt.Errorf("reading columns of starrocks table %s: %w", table, err)
 	}
 	defer rows.Close()
 
-	existing := map[string]bool{}
+	columns := map[string]string{}
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, comment string
+		if err := rows.Scan(&name, &comment); err != nil {
 			return nil, fmt.Errorf("reading columns of starrocks table %s: %w", table, err)
 		}
-		existing[strings.ToLower(name)] = true
+		columns[strings.ToLower(name)] = comment
 	}
-	return existing, rows.Err()
+	return columns, rows.Err()
 }
 
 func (c *StarRocksCatalog) exec(ctx context.Context, statement string) error {

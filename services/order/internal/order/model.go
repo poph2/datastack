@@ -44,16 +44,20 @@ const (
 // databases, so they aren't foreign keys.
 type Order struct {
 	database.Model
-	UserID        uint64  `gorm:"not null"`
-	AttributionID *uint64 // nil for organic traffic
-	ProductID     string  `gorm:"size:50;not null"`
-	Quantity      int     `gorm:"not null;check:chk_orders_quantity,quantity >= 1"`
-	// Set once inventory has reserved the stock and quoted a price.
-	UnitPrice   *decimal.Decimal `gorm:"type:decimal(10,2)"`
-	TotalAmount *decimal.Decimal `gorm:"type:decimal(10,2)"`
-	// The reconciler looks for orders stuck in PAID, so status gets an index.
-	Status        Status         `gorm:"size:20;not null;index;check:chk_orders_status,status IN ('PENDING','PAID','FAILED','SHIPPED')"`
-	FailureReason *FailureReason `gorm:"size:50;check:chk_orders_failure_reason,failure_reason IN ('CUSTOMER_INVALID','CUSTOMER_SUSPENDED','OUT_OF_STOCK','PRODUCT_NOT_FOUND','PAYMENT_DECLINED','UPSTREAM_ERROR')"`
+	UserID        uint64           `gorm:"not null;comment:Customer who checked out. A logical reference into the Customer Service, not an enforced foreign key. [ref: customers.id]"`
+	AttributionID *uint64          `gorm:"comment:Ad click that led to this checkout. NULL for organic traffic that arrived without an ad click. [ref: attributions.id]"`
+	ProductID     string           `gorm:"size:50;not null;comment:Product bought. Every order is for exactly one product. [ref: inventory.product_id]"`
+	Quantity      int              `gorm:"not null;check:chk_orders_quantity,quantity >= 1;comment:Number of units bought, 1 or more."`
+	UnitPrice     *decimal.Decimal `gorm:"type:decimal(10,2);comment:Price per unit in USD charged at checkout, copied from inventory.price. NULL if the checkout failed before stock was reserved."`
+	TotalAmount   *decimal.Decimal `gorm:"type:decimal(10,2);comment:Order value in USD: unit_price times quantity. NULL if the checkout failed before stock was reserved. Counts as revenue only when status is PAID or SHIPPED."`
+	Status        Status           `gorm:"size:20;not null;index;check:chk_orders_status,status IN ('PENDING','PAID','FAILED','SHIPPED');comment:Lifecycle state: PENDING (checkout in progress), PAID (charged, shipment not yet requested), SHIPPED (charged and handed to fulfillment, see shipments.shipped_at for when the box left) or FAILED (see failure_reason)."`
+	FailureReason *FailureReason   `gorm:"size:50;check:chk_orders_failure_reason,failure_reason IN ('CUSTOMER_INVALID','CUSTOMER_SUSPENDED','OUT_OF_STOCK','PRODUCT_NOT_FOUND','PAYMENT_DECLINED','UPSTREAM_ERROR');comment:Why a FAILED checkout failed, NULL otherwise: CUSTOMER_INVALID (unknown customer), CUSTOMER_SUSPENDED, OUT_OF_STOCK, PRODUCT_NOT_FOUND, PAYMENT_DECLINED (see payments.decline_reason) or UPSTREAM_ERROR (a dependency was unavailable)."`
+}
+
+// TableComment documents the table for the semantic layer (see
+// database.TableCommenter).
+func (Order) TableComment() string {
+	return "Checkout attempts (Order Service): one row per checkout, failed ones included. The central fact table: user_id joins customers.id, product_id joins inventory.product_id, attribution_id joins attributions.id, and payments.order_id and shipments.order_id join back to orders.id. created_at is when the checkout happened. Revenue is the sum of total_amount over orders with status PAID or SHIPPED. Checkout success rate is SHIPPED orders divided by all orders."
 }
 
 // Migrate creates or updates the Order Service schema.

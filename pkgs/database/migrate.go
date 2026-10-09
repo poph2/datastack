@@ -24,9 +24,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql`
 
-// AutoMigrate creates or updates the tables for models, then installs the
-// set_updated_at trigger on each of them. It's idempotent, so it is safe to
-// run on every deploy.
+// AutoMigrate creates or updates the tables for models (including column
+// comments from `comment:` tags), installs the set_updated_at trigger on each,
+// and applies table comments (see TableCommenter). It's idempotent, so it is
+// safe to run on every deploy.
 func AutoMigrate(ctx context.Context, db *gorm.DB, models ...any) error {
 	db = db.WithContext(ctx)
 
@@ -46,6 +47,9 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, models ...any) error {
 			clause.Table{Name: table + "_set_updated_at"}, clause.Table{Name: table}).Error
 		if err != nil {
 			return fmt.Errorf("creating updated_at trigger on %s: %w", table, err)
+		}
+		if err := applyTableComment(db, model, table); err != nil {
+			return err
 		}
 	}
 	return nil

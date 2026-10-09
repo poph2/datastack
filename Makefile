@@ -30,7 +30,7 @@ port_for       = $(or $(call service_field,$(1),3),$(if $(filter cdc-sync,$(1)),
 # Journeys per second for `make load`.
 RATE ?= 5
 
-.PHONY: up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status \
+.PHONY: catalog catalog-migrate catalog-check up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status \
         observability dashboards dashboards-configmap grafana
 
 ## Local Postgres (docker compose) for `go run` development
@@ -51,6 +51,34 @@ run-%:
 		go run ./services/$* migrate
 	DATABASE_URL=$(LOCAL_DATABASE_HOST)/$(call database_for,$*)?sslmode=disable LOG_FORMAT=text \
 		go run ./services/$* serve
+
+## Data catalog
+
+CATALOG_DATABASES := $(foreach s,$(SERVICES),$(call database_for,$(s)))
+CATALOG_ARGS       = --postgres-url "$(LOCAL_DATABASE_HOST)/?sslmode=disable" \
+                     --databases $(subst $(eval) ,$(comma),$(strip $(CATALOG_DATABASES)))
+comma := ,
+
+# Migrates every service into the local Postgres, so their schema comments are
+# in place. Missing databases are created, so an older compose volume works too.
+catalog-migrate: up
+	@for db in $(CATALOG_DATABASES); do \
+		$(COMPOSE) exec -T postgres psql -U demo -d datastack -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1 \
+			|| $(COMPOSE) exec -T postgres psql -U demo -d datastack -qc "CREATE DATABASE $$db"; \
+	done
+	@for entry in $(SERVICE_TABLE); do \
+		svc=$${entry%%:*}; rest=$${entry#*:}; db=$${rest%%:*}; \
+		DATABASE_URL=$(LOCAL_DATABASE_HOST)/$$db?sslmode=disable LOG_LEVEL=warn go run ./services/$$svc migrate || exit 1; \
+	done
+
+# Validates every table/column comment and [ref: ...] join marker, then
+# regenerates docs/microservices/data-catalog.md.
+catalog: catalog-migrate
+	go run ./tools/catalog $(CATALOG_ARGS)
+
+# Fails if the committed catalog doesn't match the models.
+catalog-check: catalog-migrate
+	go run ./tools/catalog $(CATALOG_ARGS) --check
 
 ## Quality
 
