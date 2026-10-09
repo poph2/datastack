@@ -47,7 +47,7 @@ test-unit:
 lint:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:" && gofmt -l . && exit 1)
 	go vet ./...
-	helm lint deploy/charts/go-service -f deploy/values/customer.yaml
+	@for values in deploy/values/*.yaml; do helm lint --quiet deploy/charts/go-service -f $$values || exit 1; done
 
 ## kind cluster
 
@@ -80,8 +80,8 @@ forward-%:
 	$(KUBECTL) port-forward svc/$*-service $(call port_for,$*):$(call port_for,$*)
 
 # Service name -> database / port.
-database_for = $(word 1,$(subst :, ,$(filter $(1):%,$(SERVICE_DATABASES))))
+database_for = $(word 2,$(subst :, ,$(filter $(1):%,$(SERVICE_DATABASES))))
 port_for     = $(word 2,$(subst :, ,$(filter $(1):%,$(SERVICE_PORTS))))
 
-SERVICE_DATABASES := customer:customers
-SERVICE_PORTS     := customer:8081
+SERVICE_DATABASES := customer:customers inventory:inventory
+SERVICE_PORTS     := customer:8081 inventory:8083

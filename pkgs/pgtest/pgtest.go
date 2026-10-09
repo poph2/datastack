@@ -3,6 +3,7 @@ package pgtest
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -20,6 +21,16 @@ func Start(t *testing.T) string {
 
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in -short mode")
+	}
+
+	// Each service's test package runs as its own process, in parallel, and
+	// every process tried to start testcontainers' shared reaper container.
+	// Those starts race and fail intermittently. CleanupContainer below already
+	// removes each container when its test ends, so the reaper is only needed
+	// if the test binary is killed mid-run (then: docker rm -f the leftovers).
+	// testcontainers reads this once, on first use in the process.
+	if err := os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true"); err != nil {
+		t.Fatalf("disabling testcontainers reaper: %v", err)
 	}
 
 	ctx := context.Background()

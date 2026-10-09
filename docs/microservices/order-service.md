@@ -119,7 +119,7 @@ sequenceDiagram
     O-->>k6: 422
   end
   O->>I: POST /inventory/reserve {product_id, quantity}
-  alt 400 / 404
+  alt 409 / 404
     O->>O: FAILED (OUT_OF_STOCK / PRODUCT_NOT_FOUND)
     O-->>k6: 422
   end
@@ -156,7 +156,7 @@ Step by step:
 |---|---|---|---|
 | Customer 404 | `FAILED` | `CUSTOMER_INVALID` | none |
 | Customer not ACTIVE | `FAILED` | `CUSTOMER_SUSPENDED` | none |
-| Inventory 400 | `FAILED` | `OUT_OF_STOCK` | none |
+| Inventory 409 | `FAILED` | `OUT_OF_STOCK` | none |
 | Inventory 404 | `FAILED` | `PRODUCT_NOT_FOUND` | none |
 | Payment 402 | `FAILED` | `PAYMENT_DECLINED` | release inventory |
 | Customer/Inventory/Payment unreachable | `FAILED` | `UPSTREAM_ERROR` | release inventory if it was reserved |

@@ -1,0 +1,16 @@
+# Inventory Service. Deployed as release "inventory-service", which is also its
+# in-cluster DNS name: http://inventory-service:8083
+image:
+  repository: datastack/inventory
+
+port: 8083
+
+postgres:
+  database: inventory
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  RESTOCK_INTERVAL: 2m
+  RESTOCK_THRESHOLD: "10"
+  RESTOCK_QUANTITY: "50"

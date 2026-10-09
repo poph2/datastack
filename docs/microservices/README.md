@@ -4,7 +4,7 @@ This is the architecture of DataStack's e-commerce microservice ecosystem. It re
 
 The ecosystem has six Go HTTP microservices and a Go CDC sync daemon. It runs on a local Kubernetes (kind) cluster. k6 generates the traffic, OpenTelemetry emits distributed traces, and the sync daemon streams operational data into StarRocks for real-time Grafana dashboards.
 
-> **Status:** being built one service at a time. Built so far: **Customer Service** ([`services/customer`](../../services/customer)), the reference implementation for the conventions in §3.
+> **Status:** being built one service at a time. Built so far: **Customer Service** ([`services/customer`](../../services/customer)), the reference implementation for the conventions in §3, and **Inventory Service** ([`services/inventory`](../../services/inventory)).
 
 ## Service Index
 
@@ -113,7 +113,7 @@ sequenceDiagram
   O->>C: GET /customers/{id}
   C-->>O: {country, loyalty_tier, status}
   O->>I: POST /inventory/reserve
-  I-->>O: 200 {unit_price} or 400 OUT_OF_STOCK
+  I-->>O: 200 {unit_price} or 409 OUT_OF_STOCK
   O->>P: POST /payments/process
   P-->>O: SUCCESS or DECLINED
   alt declined
@@ -187,6 +187,8 @@ CREATE TRIGGER customers_set_updated_at
 - REST over JSON with **gin**. Requests are validated with gin binding tags (go-playground/validator), and invalid input gets `400 INVALID_REQUEST`.
 - Error body: `{"error": "<MACHINE_CODE>", "message": "<human text>"}` (`httpserver.RespondError`). Machine codes such as `OUT_OF_STOCK` and `PAYMENT_DECLINED` are what the Order Service records as `failure_reason`. 500s never leak internals.
 - Database models are never serialised directly. Handlers map them to response structs.
+- **Status codes:** `400` only for malformed or invalid input, `404` for an unknown entity, and `409` when a valid request conflicts with current state (`EMAIL_EXISTS`, `OUT_OF_STOCK`). Callers branch on the `error` code, never on the status alone.
+- **Money** is `shopspring/decimal` in Go and `DECIMAL(10,2)` in Postgres, never `float64`. In JSON it is a fixed two-decimal **string** (`"49.99"`, `"50.00"`, via `StringFixed(2)`), so JavaScript clients can't silently round it. Requests should accept the same form, since `decimal.Decimal` unmarshals both strings and numbers.
 - Every service exposes `GET /healthz` (liveness), `GET /readyz` (readiness; pings the DB) and `GET /metrics`. These sit outside the tracing and logging middleware, so probes don't create noise.
 - Service-to-service URLs come from environment variables populated by ConfigMaps (for example `PAYMENT_URL=http://payment-service:8084`).
 - Outbound HTTP clients use explicit timeouts. No call waits forever.
@@ -227,6 +229,13 @@ deploy/
 ```
 
 A service adds a service layer between handler and repository only when it has real business logic. The Order Service's orchestration will have one; the Customer Service doesn't need one.
+
+More patterns, established by the Inventory Service:
+
+- **Concurrency through SQL, not locks.** State changes that must be race-free are one conditional `UPDATE ... WHERE <guard> RETURNING` (GORM: `Model(&x).Clauses(clause.Returning{}).Where(...).Update(col, gorm.Expr(...))`). Under READ COMMITTED, Postgres re-checks the guard against the latest row version, so no explicit transaction or `SELECT ... FOR UPDATE` is needed. A test races many goroutines against it.
+- **Background workers** (`restocker.go`) run beside the HTTP server under `errgroup` in `serve.go`, so they share one lifetime and the DB closes only after both stop. Each run is its own root span. A worker must be safe with several replicas running it (the guard-in-`WHERE` trick again), not depend on leader election.
+- **Seed data is a goose migration** (`00003_seed_catalog.sql`), deterministic, so the existing `migrate up` initContainer loads it and every environment has the same IDs.
+- **Domain metrics** live in the domain package's `metrics.go` (`<service>_<thing>_total`, low-cardinality labels such as `outcome`). The shared HTTP metrics count requests; domain metrics count what happened to the business.
 
 ### 3.6 Testing
 
