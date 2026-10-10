@@ -45,13 +45,17 @@ tempo:
       metrics_generator:
         processors: [service-graphs, span-metrics]
 
+  # 640Mi was not enough: Tempo was OOMKilled five times in a three-hour
+  # rehearsal at 10-15 journeys a second, which blanks the service map and the
+  # "View trace" links mid-demo. It also runs the metrics_generator above, whose
+  # service-graph and span-metrics processors hold their own state.
   resources:
     requests:
       cpu: 50m
-      memory: 192Mi
+      memory: 256Mi
     limits:
       cpu: 500m
-      memory: 640Mi
+      memory: 1536Mi
 
 # Local storage on the pod (emptyDir). Traces live 24h at most anyway.
 persistence:

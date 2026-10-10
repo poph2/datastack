@@ -1,5 +1,10 @@
 # Handoff: Finishing DataStack on the Demo Machine
 
+> **Status: done, 2026-10-09/10.** All five tasks were worked through on the demo machine (Windows 11, Docker Desktop with 12 CPUs and 62 GB, Ollama on an RTX 3060 12 GB). The analyzer answers end to end and scores **20/20** with `qwen2.5-coder` and 15/20 with `qwen3.5:9b` ([analyzer-service.md, Eval Results](microservices/analyzer-service.md#eval-results)); the web UI was driven through every page in a browser; and a full rehearsal ran all three acts and all four chaos scenarios. [demo-runbook.md](demo-runbook.md) has been corrected to match what actually happened. The sections below are kept as the record of what was asked for.
+>
+> Five things were broken and are now fixed: the `golang:1.26-alpine` builder had drifted to Go 1.26.2 so **no service could build**; the Tracing dashboard's service map was dead (`nodegraph` should be `nodeGraph`); Tempo was being OOMKilled at 640Mi; the restocker's 2-minute loop made OUT_OF_STOCK the dominant failure even with healthy knobs; and three analyzer questions failed on documentation gaps rather than model error. Details are in the final report and the per-file changes.
+
+
 This is for an AI agent (or a person) continuing the work on the machine that runs the full kind stack. The code is complete, unit-tested and documented. What remains has to be checked live, and the development laptop can't run the stack. Work through the tasks in order. Each task says what "done" means.
 
 ## Before you start

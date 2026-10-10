@@ -292,7 +292,7 @@ make eval EVAL_ARGS="--cases revenue_by_tier"      # one case
 | Model | Score | Cases | Notes |
 |---|---|---|---|
 | `qwen2.5-coder:latest` (7B, the default) | **1.00** | 20/20 | Three consecutive runs scored 20/20, 19/20, 20/20. Every case answers in one attempt except ROAS and CAC, which take two |
-| `qwen3.5:9b` | **0.70** | 14/20 | A general model, not a coder model. Use the default on stage |
+| `qwen3.5:9b` | **0.75** | 15/20 | A general model, not a coder model. Use the default on stage |
 
 ### Run the eval with the load stopped
 
@@ -317,4 +317,4 @@ One failure was a genuine dialect rule, so it went into `rules` in [`prompt.go`]
 
 - **`time_to_ship_by_tier`** failed in one of three runs. Ollama at `temperature: 0` is not bit-deterministic, and this case has the model choosing whether to filter orders by status. It is the only case that has ever flipped between runs on the default model.
 - **`out_of_stock_products` and `top_products_by_revenue`** are structurally fragile, though they passed every run: the first reads `stock_level = 0`, which the restocker and live checkouts flip constantly, and the second compares a top-5 list `ordered: true` with no tie-break. Both are reliable only with the load stopped.
-- **`qwen3.5:9b`'s six failures** are its own SQL errors, not documentation gaps: a `WHERE` clause placed before a `JOIN` (`orders_per_country`), a missing `AVG()` with `GROUP BY 1` returning 33 rows (`avg_time_to_ship`), joining `payments` on `p.id = o.id` instead of `p.order_id` (`roas_per_campaign`, `cleared_revenue_by_source`), and ignoring the GROUP BY rule twice. Teaching the prompt around them would cost tokens for a model the demo does not use.
+- **`qwen3.5:9b`'s five remaining failures** are its own SQL errors, not documentation gaps: a `WHERE` clause placed before a `JOIN` (`orders_per_country`), a missing `AVG()` with `GROUP BY 1` returning 33 rows (`avg_time_to_ship`), joining `payments` on `p.id = o.id` instead of `p.order_id` (`roas_per_campaign`, `cleared_revenue_by_source`), and ignoring the GROUP BY rule twice despite the rule and the `campaigns` table comment both stating it. The documentation fixes above lifted it from 14/20 to 15/20; teaching the prompt around the rest would cost tokens for a model the demo does not use.

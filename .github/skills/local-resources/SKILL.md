@@ -29,11 +29,11 @@ Every container on the kind cluster has `resources.requests` and `resources.limi
 | StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 3Gi | `deploy/infra/starrocks.yaml` |
 | k6 | 100m / 64Mi | 1 CPU / 256Mi | `deploy/k6/deployment.yaml` |
 | OTel Collector | 25m / 64Mi | 500m / 192Mi | `deploy/observability/otel-collector.yaml` |
-| Tempo | 50m / 192Mi | 500m / 640Mi | `deploy/observability/tempo.yaml` |
+| Tempo | 50m / 256Mi | 500m / 1536Mi | `deploy/observability/tempo.yaml` (640Mi was OOMKilled repeatedly above ~10 journeys/s; it also runs the metrics generator) |
 | Prometheus (+ config reloader 5m / 16Mi) | 50m / 256Mi | 500m / 768Mi | `deploy/observability/prometheus.yaml` |
 | Grafana | 50m / 128Mi | 500m / 384Mi | `deploy/observability/grafana.yaml` |
 
-The whole stack measured at about 5.2 GiB of working-set memory on a 7.65 GiB kind node, with k6 at 5 journeys per second.
+The whole stack measured at about 5.2 GiB of working-set memory on a 7.65 GiB kind node, with k6 at 5 journeys per second. Above that rate Tempo is the component that grows: at 10-15 journeys a second it was OOMKilled five times in three hours on the 640Mi limit it used to have.
 
 StarRocks is the dominant cost. If the machine struggles, it's the first thing to stop (`kubectl --context kind-datastack scale statefulset/starrocks --replicas=0`). The services keep running, and CDC retries until StarRocks is back.
 

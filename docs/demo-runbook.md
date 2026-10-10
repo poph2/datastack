@@ -62,7 +62,7 @@ Let it run under load for **at least 15 minutes** before the talk, so the dashbo
 | CDC | `make forward-cdc-sync`, then `curl localhost:8090/status` | Every table syncing with a lag of a few seconds, `comments_in_sync: true` |
 | Dashboards | Grafana → DataStack folder | Executive shows orders and revenue. The Tracing service map shows Order with edges to five services |
 | Analyzer | Web UI → Ask, with an example question | An answer within seconds (GPU) or tens of seconds (CPU). The first question after the model loads is the slow one; the analyzer warms the model at start-up |
-| Analyzer accuracy | `make eval` | Record the score in [analyzer-service.md](microservices/analyzer-service.md). Rerun after changing models |
+| Analyzer accuracy | `make eval` | 20/20 with the default model on a GPU, in under a minute. **Stop the load first** (`make load-stop`, then wait for zero CDC lag) or correct SQL fails on value drift. Scores are recorded in [analyzer-service.md](microservices/analyzer-service.md) |
 | Chaos | Web UI → Chaos | Six cards, all "healthy defaults" |
 | Load | Web UI → Load | Running at the rate you set |
 
@@ -78,22 +78,28 @@ Each act shows one layer, then breaks something and shows the system noticing it
 ### Act 2: ask the data
 1. **Web UI → Ask:** use the example chips, or ask:
    - "What is the total revenue for each customer loyalty tier?" (a bar chart appears)
-   - "What is the ROAS of each paid campaign?"
+   - "What is the ROAS of each paid campaign?" (takes two attempts, about 3s: the first query comes back with an invalid `GROUP BY` and the service repairs it)
    - "What is the average time to ship, in seconds, for each loyalty tier?"
+
+   All three were rehearsed against the live stack on a GPU and answer in 1–5 seconds.
 2. Show the generated SQL. The joins come from the `[ref: …]` markers in the column comments, which the services' GORM models wrote. Nobody hand-wrote a semantic layer: see [data-catalog.md](microservices/data-catalog.md).
 3. **View trace:** the question's own trace, showing schema prompt → LLM → guard → EXPLAIN → execute.
 
 ### Act 3: break things
 Run one scenario at a time from **Web UI → Chaos**, and reset it before the next. For each one, the table lists what to change, where its effect shows, and what to ask the analyzer.
 
+Each scenario needs **two to three minutes** under load before the dashboards tell the story, because the panels average over a two-minute window. The numbers below were measured in a full rehearsal at `RATE=10`, against a healthy baseline of about **90% checkout success**.
+
 | Scenario | Knob | Where it shows | Ask the analyzer |
 |---|---|---|---|
-| Payment processor degrades | payment `decline_rate` 0.6 | Executive: success rate falls. Services: declines. Tracing: failed checkouts | "How many payments were declined for each decline reason?" |
-| Slow dependency | inventory `latency_ms` 1500 | Tracing: the reserve span grows inside every checkout trace. Services: p95 | n/a (a latency story) |
-| Warehouse backlog | shipment `ship_capacity` 0, then `packing_delay_factor` 10 | Fulfillment: backlog grows and time-to-ship climbs | "What is the average time to ship, in seconds, for each loyalty tier?" |
+| Payment processor degrades | payment `decline_rate` 0.6 | Executive: success rate falls from ~90% to ~38% within 3 minutes, and `PAYMENT_DECLINED` takes over the failure-reasons panel. Services: declines. Tracing: failed checkouts | "How many payments were declined for each decline reason?" |
+| Slow dependency | inventory `latency_ms` 1500 | Tracing: the reserve span grows inside every checkout trace, and the "Slow checkouts > 500ms" panel fills up (it is empty when healthy). Services: inventory p95 goes 0.005s → 2.4s, order-service follows. The success rate does **not** move: this is purely a latency story | n/a |
+| Warehouse backlog | shipment `ship_capacity` 0 for ~2 minutes, **then restore it to 10 and set** `packing_delay_factor` 10 | Fulfillment: with capacity 0 the backlog climbs (pending 150 → 2.4K). Restoring capacity with the packing delay is what makes time-to-ship climb: p95 goes ~50s → 5 minutes | "What is the average time to ship, in seconds, by loyalty tier, for shipments shipped in the last 10 minutes?" |
 | Stock-out | inventory `restock_paused` on, then Drain stock 20 | Inventory: out-of-stock failures and lost revenue | "Which products are out of stock right now?" |
 
-Close with **Reset all chaos**. The dashboards recover within a minute, and the analytics tables keep the incident as history.
+Two things about the warehouse scenario are worth knowing before you run it on stage. **`ship_capacity` 0 freezes shipping completely**, so nothing new ships and time-to-ship cannot climb while it is zero — it only grows the backlog. The climb comes from `packing_delay_factor` with capacity restored. And the analyzer question **must be scoped to a recent window**: the unscoped "average time to ship for each loyalty tier" averages over every shipment ever made, so after 80,000 healthy shipments it crawls from 16s to 24s while the dashboard (which filters on `shipped_at`) shows 5 minutes.
+
+Close with **Reset all chaos**. Give it **two to three minutes**, not one: the knobs clear instantly, but the restocker needs a few 30s cycles to refill whatever Drain stock emptied, and the dashboard panels average over two minutes. Measured in rehearsal: the checkout success rate went from 43.3% back to 88.4% and products out of stock from 28 back to 4. The analytics tables keep the incident as history.
 
 ## 6. Reset and teardown
 
