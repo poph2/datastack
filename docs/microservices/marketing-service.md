@@ -256,6 +256,8 @@ SELECT c.utm_source, c.utm_campaign,
  GROUP BY c.utm_source, c.utm_campaign, c.ad_spend;
 ```
 
+These two keep every campaign and let the ratio go NULL where `ad_spend` is `0.00`, which is what a dashboard wants. A question specifically about *paid* campaigns is different: `campaigns.ad_spend` tells the analyzer to filter to `ad_spend > 0`, so the email and organic rows drop out instead of appearing as NULL. Both are correct for their own question; the `GROUP BY ... , c.ad_spend` is required either way, because `ad_spend` is a column and not an aggregate.
+
 - **Conversion rate:** `COUNT(order_id) / COUNT(*)` over `attributions`, per source or campaign.
 - **Click-to-purchase latency:** `converted_at - created_at`, both from the database clock.
 - **Real-time view:** `rate(marketing_conversion_revenue_total[5m])` by `utm_source` in Prometheus, before the CDC data lands in StarRocks.

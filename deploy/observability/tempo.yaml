@@ -14,7 +14,11 @@ tempo:
   # The default 1 GB ballast is far too much for a laptop cluster.
   memBallastSizeMbs: 0
   reportingEnabled: false
-  retention: 24h
+  # 2h, not 24h. Nothing in the demo looks further back than an hour: the web
+  # UI's "View trace" link opens a now-1h window and the sidebar's Tempo link
+  # now-15m. A day of blocks is what made Tempo grow until it was OOMKilled
+  # about every 70 minutes under load, which is well inside a talk.
+  retention: 2h
 
   # Spans arrive over OTLP from the collector. The chart's Jaeger receivers
   # stay (its port templates require them); nothing sends to them.
@@ -48,7 +52,9 @@ tempo:
   # 640Mi was not enough: Tempo was OOMKilled five times in a three-hour
   # rehearsal at 10-15 journeys a second, which blanks the service map and the
   # "View trace" links mid-demo. It also runs the metrics_generator above, whose
-  # service-graph and span-metrics processors hold their own state.
+  # service-graph and span-metrics processors hold their own state. The 2h
+  # retention above is the other half of the fix; on 24h it still grew out of
+  # 1536Mi after about 70 minutes.
   resources:
     requests:
       cpu: 50m
