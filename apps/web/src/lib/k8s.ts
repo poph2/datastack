@@ -194,3 +194,49 @@ export async function patchLoad(change: {
   if (res.status !== 200) throw kubeError(res);
   return toState(res.body as Deployment);
 }
+
+type PodList = {
+  items?: {
+    metadata?: { name?: string };
+    status?: {
+      phase?: string;
+      containerStatuses?: { ready?: boolean; restartCount?: number }[];
+    };
+  }[];
+};
+
+/**
+ * Health of every pod in the namespace, keyed by the workload name the stack
+ * landscape knows (`WATCHED_WORKLOADS`). A Deployment's pods carry a generated
+ * suffix, so "grafana" matches "grafana-565968f5d-hb6ff"; a StatefulSet pod
+ * like "tempo-0" matches exactly. Read-only, and one call for the whole page.
+ */
+export async function getWorkloadHealth(
+  workloads: readonly string[],
+): Promise<Record<string, { ready: boolean; restarts: number }>> {
+  const send = await transport();
+  const res = await send(
+    "GET",
+    `/api/v1/namespaces/${encodeURIComponent(k8sNamespace())}/pods`,
+  );
+  if (res.status !== 200) throw kubeError(res);
+
+  const pods = ((res.body as PodList).items ?? []).map((p) => {
+    const statuses = p.status?.containerStatuses ?? [];
+    return {
+      name: p.metadata?.name ?? "",
+      ready: statuses.length > 0 && statuses.every((c) => c.ready),
+      restarts: statuses.reduce((n, c) => n + (c.restartCount ?? 0), 0),
+    };
+  });
+
+  const health: Record<string, { ready: boolean; restarts: number }> = {};
+  for (const workload of workloads) {
+    // Exact name first (StatefulSet pods), then the Deployment pod prefix.
+    const pod =
+      pods.find((p) => p.name === workload) ??
+      pods.find((p) => p.name.startsWith(`${workload}-`));
+    if (pod) health[workload] = { ready: pod.ready, restarts: pod.restarts };
+  }
+  return health;
+}

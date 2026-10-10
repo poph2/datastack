@@ -1,6 +1,7 @@
-# The web UI's load page reads and patches the k6 Deployment (RATE env and
-# replicas) through the Kubernetes API, as this ServiceAccount. It can touch
-# nothing else.
+# The web UI talks to the Kubernetes API as this ServiceAccount, for two
+# read-only-ish things: the load page reads and patches the k6 Deployment
+# (RATE env and replicas), and the stack landscape lists pods to show a live
+# dot next to each tool. It can touch nothing else.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,6 +22,12 @@ rules:
     resources: ["deployments"]
     resourceNames: ["k6"]
     verbs: ["get", "patch"]
+  # The stack landscape's live dots. Listing pods cannot be narrowed with
+  # resourceNames (a list call has no name), so this is list-only on pods in
+  # this namespace, and nothing else.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

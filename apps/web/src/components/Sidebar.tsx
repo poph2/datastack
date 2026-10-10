@@ -10,6 +10,7 @@ const PAGES = [
   { href: "/", label: "Ask the data", hint: "Text to SQL on StarRocks" },
   { href: "/chaos", label: "Chaos", hint: "Break the services" },
   { href: "/load", label: "Load", hint: "k6 checkout journeys" },
+  { href: "/stack", label: "The stack", hint: "Every tool, live" },
 ];
 
 export function Sidebar() {
