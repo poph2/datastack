@@ -111,6 +111,7 @@ Local development without kind: `make up` (Postgres in Docker Compose), then `ma
 - [docs/microservices/analyzer-service.md](docs/microservices/analyzer-service.md): the text-to-SQL service (prompt, providers, guard, eval).
 - [apps/web/README.md](apps/web/README.md): the demo UI.
 - [docs/demo-runbook.md](docs/demo-runbook.md): setting up the stack and running the talk's demo.
+- [docs/handoff-demo-machine.md](docs/handoff-demo-machine.md): **open work**. The live verification, eval and rehearsal tasks left for the demo machine. Start here if you are picking the project up on that machine.
 
 ## Not in Scope
 
