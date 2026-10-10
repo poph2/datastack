@@ -10,7 +10,7 @@ DataStack is a demo for the Data Engineering Things Summit. It runs a small e-co
 2. **Load:** k6 runs inside the cluster and simulates customer journeys (sign up, ad click, checkout) at a configurable rate.
 3. **Analytical layer:** a Go CDC sync daemon polls every table by `(updated_at, id)` and loads micro-batches into StarRocks over Stream Load.
 4. **Observability layer:** every service emits OpenTelemetry traces (Collector → Tempo) and Prometheus metrics. Grafana shows traces, the service map, service and pipeline metrics, and business dashboards that query StarRocks directly.
-5. **Insight layer:** the Analyzer Service turns questions into read-only StarRocks SQL with an LLM (Ollama by default, Claude API optional), using the schema's table and column comments as context. A Next.js web UI (`apps/web`) is the demo's control center: ask the data, toggle chaos in the services, set the k6 rate, jump to Grafana.
+5. **Insight layer:** the Analyzer Service turns questions into read-only StarRocks SQL with an LLM (Ollama by default, Claude API optional), using the schema's table and column comments as context. A Next.js web UI (`apps/web`) is the demo's control center: ask the data, toggle chaos in the services, set the k6 rate, show the stack landscape, jump to Grafana.
 
 The architecture spec, and the source of truth for conventions, is [docs/microservices/README.md](docs/microservices/README.md). **Read its §3 "Shared Conventions" before writing or changing any service.**
 

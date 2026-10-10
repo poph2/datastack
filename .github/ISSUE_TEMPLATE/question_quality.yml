@@ -1,0 +1,36 @@
+name: The analyzer answered badly
+description: A question produced wrong SQL, wrong numbers, or an error.
+labels: [analyzer]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most wrong answers are a documentation problem, not a model problem: a column comment that
+        doesn't say what the column means. That makes these reports genuinely useful.
+  - type: input
+    id: question
+    attributes:
+      label: The question you asked
+    validations:
+      required: true
+  - type: textarea
+    id: sql
+    attributes:
+      label: The SQL it generated
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the right answer would have been
+      description: Ideally the SQL you would have written, and why.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: qwen2.5-coder:latest
+    validations:
+      required: true

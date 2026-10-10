@@ -20,6 +20,14 @@ const GRID = "#1e293b"; // slate-800
 
 const fmt = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
+// Axis ticks are compact ("120M", not "120,000,000"): revenue over a full demo
+// run reaches nine digits, which the old fixed-width axis silently clipped to
+// a wrong-looking number, and long labels are hard to read from a projector.
+const fmtAxis = (n: number) =>
+  Math.abs(n) >= 1000
+    ? n.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 })
+    : fmt(n);
+
 /** A bar chart for results with one category column and one numeric column. */
 export function ResultChart({ result }: { result: AskResponse }) {
   const shape = barChartShape(result);
@@ -58,8 +66,8 @@ export function ResultChart({ result }: { result: AskResponse }) {
               tick={{ fill: INK, fontSize: 15 }}
               tickLine={false}
               axisLine={false}
-              tickFormatter={fmt}
-              width={72}
+              tickFormatter={fmtAxis}
+              width={64}
             />
             <Tooltip
               cursor={{ fill: "rgba(148,163,184,0.12)" }}

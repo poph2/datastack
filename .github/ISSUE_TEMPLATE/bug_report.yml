@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in the stack doesn't behave the way the docs say it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more of the cluster's own output you can paste, the better —
+        `make status`, the pod logs, and `curl localhost:8090/status` for anything CDC-related.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, `make status` output, a failing query, a trace ID.
+      render: shell
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - A Go service (order, customer, marketing, inventory, payment, shipment)
+        - CDC sync / StarRocks
+        - Analyzer (text to SQL)
+        - Web UI
+        - Observability (Collector, Tempo, Prometheus, Grafana)
+        - Deployment (kind, Helm, manifests)
+        - Docs
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker memory and CPUs, whether Ollama is on a GPU, and which model.
+      placeholder: |
+        OS:
+        Docker:         12 GB, 6 CPUs
+        Ollama:         RTX 3060, qwen2.5-coder
+    validations:
+      required: true

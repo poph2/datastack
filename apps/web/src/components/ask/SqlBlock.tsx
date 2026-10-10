@@ -68,7 +68,7 @@ export function SqlBlock({ sql, tone = "normal" }: { sql: string; tone?: "normal
       >
         {copied ? "Copied" : "Copy"}
       </button>
-      <pre className="overflow-x-auto p-4 pr-20 font-mono text-[15px] leading-relaxed text-slate-100">
+      <pre className="overflow-x-auto p-4 pr-20 font-mono text-[15px] leading-relaxed whitespace-pre-wrap text-slate-100">
         <code>{highlight(sql)}</code>
       </pre>
     </div>

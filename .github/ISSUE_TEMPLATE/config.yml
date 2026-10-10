@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Conventions and architecture
+    url: https://github.com/poph2/datastack/blob/main/docs/microservices/README.md
+    about: How the services are built, before opening an issue about a convention.
+  - name: Demo runbook
+    about: Bring-up, pre-flight checks and troubleshooting.
+    url: https://github.com/poph2/datastack/blob/main/docs/demo-runbook.md

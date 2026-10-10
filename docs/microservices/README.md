@@ -18,7 +18,7 @@ The ecosystem has six Go HTTP microservices, a Go CDC sync daemon and a Go analy
 | Shipment Service | 8085 | `shipments` | `shipments` | Simulated fulfillment with artificial packing delay | [shipment-service.md](shipment-service.md) |
 | CDC Sync App | 8090 | reads all six | n/a | Watermark polling into StarRocks Stream Load | [cdc-sync.md](cdc-sync.md) |
 | Analyzer Service | 8086 | none (reads StarRocks) | n/a | Plain-English questions → SQL over `analytics_db`, via a pluggable LLM (Ollama by default) | [analyzer-service.md](analyzer-service.md) |
-| Web UI | 3001 | none | n/a | Demo control center: ask the data, chaos toggles, k6 load, Grafana links | [apps/web/README.md](../../apps/web/README.md) |
+| Web UI | 3001 | none | n/a | Demo control center: ask the data, chaos toggles, k6 load, the stack landscape, Grafana links | [apps/web/README.md](../../apps/web/README.md) |
 
 ## 1. System Topology
 
@@ -27,7 +27,7 @@ The ecosystem has four layers:
 1. **Operational layer (Go + PostgreSQL).** Six independent HTTP REST microservices. Each one owns its own logical database inside a shared PostgreSQL instance. They talk to each other synchronously over HTTP JSON APIs. No service reads another service's database.
 2. **Observability layer (OpenTelemetry + Tempo).** Every Go service is instrumented with OpenTelemetry. Spans go to an OTel Collector, are stored in Grafana Tempo, and are viewed in Grafana.
 3. **Analytical layer (Go CDC + StarRocks).** A Go sync daemon polls the `updated_at` watermark of every operational table and pushes micro-batches into StarRocks over HTTP Stream Load. Grafana dashboards query StarRocks.
-4. **Insight layer (Analyzer + Web UI).** The Analyzer turns a plain-English question into one read-only StarRocks query, using the table and column comments (§3.2) as its context. The web UI is the demo's single screen: questions, chaos toggles (§3.8) and k6 load.
+4. **Insight layer (Analyzer + Web UI).** The Analyzer turns a plain-English question into one read-only StarRocks query, using the table and column comments (§3.2) as its context. The web UI is the demo's single screen: questions, chaos toggles (§3.8), k6 load, and a landscape of every tool in the stack with a live dot on the ones currently running as pods.
 
 ```mermaid
 flowchart LR
@@ -398,7 +398,7 @@ The Analyzer Service ([`services/analyzer`](../../services/analyzer), [analyzer-
 | CDC Sync App | The go-service chart with no database of its own and no migrate step, single replica, `Recreate` strategy (`deploy/values/cdc-sync.yaml`). It's stateless, so no PVC |
 | Load | k6 as a continuous Deployment (steady demo traffic), started and scaled by `make load` or the web UI |
 | Analyzer | The go-service chart with no database (`deploy/values/analyzer.yaml`). Calls Ollama at `OLLAMA_URL` (default `host.docker.internal:11434`, which only resolves under Docker Desktop; pass `make deploy-analyzer OLLAMA_URL=...` elsewhere) or the Claude API (optional secret `analyzer-anthropic`) |
-| Web UI | `apps/web` (Next.js standalone image) with plain manifests in `deploy/web/`. Its ServiceAccount may only `get`/`patch` the `k6` Deployment |
+| Web UI | `apps/web` (Next.js standalone image) with plain manifests in `deploy/web/`. Its ServiceAccount may only `get`/`patch` the `k6` Deployment and `list` pods |
 
 Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
 

@@ -71,9 +71,10 @@ Let it run under load for **at least 15 minutes** before the talk, so the dashbo
 Each act shows one layer, then breaks something and shows the system noticing it.
 
 ### Act 1: the business is running
-1. **Web UI → Load:** k6 is simulating customers. Raise the rate to 10–20.
-2. **Grafana → Executive:** orders, revenue and success rate, from StarRocks, seconds behind Postgres.
-3. **Grafana → Tracing:** the service map, then open one checkout trace. It is one trace across six services.
+1. **Web UI → The stack:** open on this. Every tool the demo is built from, grouped by the layer it serves, and the green dots say which of them are running in this cluster right now — so the landscape is live, not a slide. Flip **Show libraries** if someone asks what's underneath. Then move on; it is a ten-second opener, not a tour.
+2. **Web UI → Load:** k6 is simulating customers. Raise the rate to 10–20.
+3. **Grafana → Executive:** orders, revenue and success rate, from StarRocks, seconds behind Postgres.
+4. **Grafana → Tracing:** the service map, then open one checkout trace. It is one trace across six services.
 
 ### Act 2: ask the data
 1. **Web UI → Ask:** use the example chips, or ask:
