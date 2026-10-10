@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep LF in the working tree, not just in the repository, for files whose
+# tooling rejects CRLF. With core.autocrlf=true on Windows, `* text=auto`
+# checks these out with CRLF, and then `gofmt -l .` reports every Go file as
+# needing formatting, so `make lint` can never pass. The repository already
+# stores LF, so this only changes what lands in the working tree.
+*.go text eol=lf
+Makefile text eol=lf

@@ -26,7 +26,7 @@ Every container on the kind cluster has `resources.requests` and `resources.limi
 | Analyzer | 25m / 32Mi | 250m / 128Mi | `deploy/values/analyzer.yaml` (waits on the LLM; result sets are capped) |
 | Web UI (Next.js) | 25m / 96Mi | 500m / 256Mi | `deploy/web/deployment.yaml` |
 | Postgres (CNPG, all six databases) | 100m / 256Mi | 1 CPU / 1Gi | `deploy/infra/postgres.yaml` |
-| StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 3Gi | `deploy/infra/starrocks.yaml` |
+| StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 4Gi | `deploy/infra/starrocks.yaml` (3Gi was OOMKilled by 20 journeys/s, and by the 44 dashboard panels refreshing together) |
 | k6 | 100m / 64Mi | 1 CPU / 256Mi | `deploy/k6/deployment.yaml` |
 | OTel Collector | 25m / 64Mi | 500m / 192Mi | `deploy/observability/otel-collector.yaml` |
 | Tempo | 50m / 256Mi | 500m / 1536Mi | `deploy/observability/tempo.yaml` (640Mi was OOMKilled repeatedly above ~10 journeys/s; it also runs the metrics generator) |

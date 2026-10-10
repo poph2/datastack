@@ -198,7 +198,7 @@ Every flag can also be set as an environment variable (`--restock-interval` ↔ 
 |---|---|---|
 | `--http-addr` / `HTTP_ADDR` | `:8083` | Set by the chart from `port` |
 | `--database-url` / `DATABASE_URL` | none | In kind: `postgres://datastack-pg-rw:5432/inventory?sslmode=require`, with `PGUSER`/`PGPASSWORD` from the CNPG secret |
-| `--restock-interval` / `RESTOCK_INTERVAL` | `2m` | Go duration. `0` disables |
+| `--restock-interval` / `RESTOCK_INTERVAL` | `2m` | Go duration. `0` disables. The kind values use `30s`: at two minutes a product that sells out stays out until the next run, which made `OUT_OF_STOCK` the dominant checkout failure even with every chaos knob at its default |
 | `--restock-threshold` / `RESTOCK_THRESHOLD` | `10` | Restock products with fewer units than this |
 | `--restock-quantity` / `RESTOCK_QUANTITY` | `50` | Units added per product. Must be at least the threshold |
 | `--log-level`, `--log-format`, `OTEL_EXPORTER_OTLP_ENDPOINT` | | As for every service |
