@@ -60,7 +60,7 @@
   },
   "panels": [
     {
-      "type": "nodegraph",
+      "type": "nodeGraph",
       "title": "Service map",
       "description": "How do the services call each other, and where are errors? Tempo service graph (Order Service is the hub calling the five others); edge stats come from traces_service_graph_* in Prometheus.",
       "datasource": {
@@ -102,7 +102,7 @@
         "x": 0,
         "y": 0,
         "w": 14,
-        "h": 14
+        "h": 18
       }
     },
     {
@@ -287,7 +287,7 @@
         "x": 14,
         "y": 0,
         "w": 10,
-        "h": 14
+        "h": 18
       }
     },
     {
@@ -365,7 +365,7 @@
       "id": 3,
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 18,
         "w": 8,
         "h": 8
       }
@@ -446,7 +446,7 @@
       "id": 4,
       "gridPos": {
         "x": 8,
-        "y": 14,
+        "y": 18,
         "w": 8,
         "h": 8
       }
@@ -526,7 +526,7 @@
       "id": 5,
       "gridPos": {
         "x": 16,
-        "y": 14,
+        "y": 18,
         "w": 8,
         "h": 8
       }
@@ -592,7 +592,7 @@
       "id": 6,
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 26,
         "w": 12,
         "h": 10
       }
@@ -658,7 +658,7 @@
       "id": 7,
       "gridPos": {
         "x": 12,
-        "y": 22,
+        "y": 26,
         "w": 12,
         "h": 10
       }

@@ -145,7 +145,7 @@ export function LoadPanel() {
               ▶ Start load
             </Button>
           )}
-          <p className="text-xs text-slate-500">
+          <p className="text-sm text-slate-400">
             Scales <code>deploy/{state.deployment}</code> between 0 and 1 replicas.
           </p>
         </Card>
@@ -210,7 +210,7 @@ export function LoadPanel() {
       <div className="flex min-h-6 items-center gap-3">
         {busy && <Spinner />}
         {notice && <Badge tone={notice.tone}>{notice.text}</Badge>}
-        {state.image && <span className="ml-auto text-xs text-slate-500">image {state.image}</span>}
+        {state.image && <span className="ml-auto text-sm text-slate-400">image {state.image}</span>}
       </div>
     </div>
   );

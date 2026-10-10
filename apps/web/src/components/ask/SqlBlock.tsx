@@ -64,7 +64,7 @@ export function SqlBlock({ sql, tone = "normal" }: { sql: string; tone?: "normal
       <button
         type="button"
         onClick={copy}
-        className="absolute top-2 right-2 rounded-md bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+        className="absolute top-2 right-2 rounded-md bg-slate-800 px-2.5 py-1 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
       >
         {copied ? "Copied" : "Copy"}
       </button>

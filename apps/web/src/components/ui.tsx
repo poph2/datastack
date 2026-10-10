@@ -42,7 +42,7 @@ export function Card({
 type Tone = "neutral" | "good" | "warn" | "bad" | "info";
 
 const BADGE_STYLES: Record<Tone, string> = {
-  neutral: "bg-slate-800 text-slate-300 ring-slate-700",
+  neutral: "bg-slate-800 text-slate-200 ring-slate-600",
   good: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/40",
   warn: "bg-amber-500/15 text-amber-300 ring-amber-500/40",
   bad: "bg-rose-500/15 text-rose-300 ring-rose-500/40",
@@ -52,7 +52,7 @@ const BADGE_STYLES: Record<Tone, string> = {
 export function Badge({ tone = "neutral", children }: { tone?: Tone; children: React.ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${BADGE_STYLES[tone]}`}
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-sm font-semibold ring-1 ${BADGE_STYLES[tone]}`}
     >
       {children}
     </span>

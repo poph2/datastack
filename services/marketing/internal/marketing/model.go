@@ -29,13 +29,13 @@ type Campaign struct {
 	UTMSource   string `gorm:"size:100;not null;uniqueIndex:idx_campaigns_source_campaign,priority:1,where:deleted_at IS NULL;comment:Traffic source, the utm_source URL parameter: google, facebook, instagram, tiktok, email or organic."`
 	UTMCampaign string `gorm:"size:100;not null;uniqueIndex:idx_campaigns_source_campaign,priority:2,where:deleted_at IS NULL;comment:Campaign name, the utm_campaign URL parameter, such as summer_sale. Unique together with utm_source."`
 	// insert, and 0.00 (organic, email) is a meaningful spend.
-	AdSpend decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_campaigns_ad_spend,ad_spend >= 0;comment:Total spend on this campaign so far, in USD. A lifetime total, not a daily amount. 0.00 for unpaid channels (email, organic)."`
+	AdSpend decimal.Decimal `gorm:"type:decimal(10,2);not null;check:chk_campaigns_ad_spend,ad_spend >= 0;comment:Total spend on this campaign so far, in USD. A lifetime total, not a daily amount. 0.00 for unpaid channels (email, organic). A paid campaign is a row with ad_spend > 0: restrict to those for any question about paid campaigns, ROAS or acquisition cost, because the unpaid channels have no spend to divide by."`
 }
 
 // TableComment documents the table for the semantic layer (see
 // database.TableCommenter).
 func (Campaign) TableComment() string {
-	return "Marketing campaigns (Marketing Service): one row per campaign, identified by the pair (utm_source, utm_campaign), with its total ad spend. Join attributions on both utm_source and utm_campaign. ROAS for a campaign is the cleared revenue of its converted attributions divided by ad_spend, and CAC is ad_spend divided by the number of distinct converted customers. The organic/none row represents traffic that arrived without an ad."
+	return "Marketing campaigns (Marketing Service): one row per campaign, identified by the pair (utm_source, utm_campaign), with its total ad spend. Join attributions on both utm_source and utm_campaign. ROAS for a campaign is the cleared revenue of its converted attributions divided by ad_spend, and CAC is ad_spend divided by the number of distinct converted customers. Both divide by ad_spend, which is a column rather than an aggregate, so group by utm_source, utm_campaign AND ad_spend. The organic/none row represents traffic that arrived without an ad."
 }
 
 // Attribution is a row in the attributions table: one visit from a campaign

@@ -184,9 +184,9 @@ export function ChaosCard({ service, refreshKey }: { service: string; refreshKey
                       />
                     </div>
                   )}
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-sm text-slate-400">
                     {knob.description}{" "}
-                    <span className="text-slate-500">
+                    <span className="text-slate-400">
                       (default {formatValue(knob, knob.default)}, {knob.min}–{knob.max})
                     </span>
                   </p>

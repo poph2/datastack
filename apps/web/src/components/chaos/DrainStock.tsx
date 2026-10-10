@@ -50,7 +50,7 @@ export function DrainStock({ onDrained }: { onDrained: (r: DrainResponse) => voi
           {busy ? "Draining…" : "Drain"}
         </Button>
       </div>
-      <p className="mt-2 text-xs text-slate-400">
+      <p className="mt-2 text-sm text-slate-400">
         Sets stock_level to 0 on random products; checkouts for them fail with OUT_OF_STOCK
         until restock (pause it above to keep them empty).
       </p>

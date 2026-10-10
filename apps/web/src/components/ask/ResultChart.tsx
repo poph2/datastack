@@ -37,7 +37,7 @@ export function ResultChart({ result }: { result: AskResponse }) {
 
   return (
     <figure className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <figcaption className="mb-2 text-sm text-slate-400">
+      <figcaption className="mb-2 text-base text-slate-300">
         <span className="font-semibold text-slate-200">{valueName}</span> by {categoryName}
         {result.rows.length > MAX_BARS && ` (first ${MAX_BARS} rows)`}
       </figcaption>
@@ -47,7 +47,7 @@ export function ResultChart({ result }: { result: AskResponse }) {
             <CartesianGrid vertical={false} stroke={GRID} />
             <XAxis
               dataKey="label"
-              tick={{ fill: INK, fontSize: 13 }}
+              tick={{ fill: INK, fontSize: 15 }}
               tickLine={false}
               axisLine={{ stroke: MUTED }}
               interval={0}
@@ -55,7 +55,7 @@ export function ResultChart({ result }: { result: AskResponse }) {
               textAnchor={longLabels ? "end" : "middle"}
             />
             <YAxis
-              tick={{ fill: MUTED, fontSize: 12 }}
+              tick={{ fill: INK, fontSize: 15 }}
               tickLine={false}
               axisLine={false}
               tickFormatter={fmt}

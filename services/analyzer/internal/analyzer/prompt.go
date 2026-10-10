@@ -26,6 +26,7 @@ var rules = []string{
 	"Revenue means SUM(orders.total_amount) over orders with status IN ('PAID', 'SHIPPED'). Cleared revenue means SUM(payments.amount) over payments with status = 'SUCCESS'. Failed checkouts are orders with status = 'FAILED'.",
 	"Enum values are upper-case strings exactly as listed in the comments, for example 'SHIPPED', 'GOLD', 'DECLINED'.",
 	"Give every computed column a short snake_case alias. Round money and ratios with ROUND(x, 2). Compute ratios with a decimal division (x * 1.0 / NULLIF(y, 0)).",
+	"Every column used outside an aggregate function must appear in GROUP BY, wherever it occurs, including inside arithmetic. Both ROUND(t.col / COUNT(*), 2) and ROUND(SUM(u.val) / t.col, 2) need t.col added to the GROUP BY list.",
 	"For 'top N', 'highest' or 'lowest' questions use ORDER BY ... LIMIT N. Otherwise order the result in a natural way.",
 	"Never select customers.email: it is personal data.",
 }

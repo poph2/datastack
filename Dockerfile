@@ -1,6 +1,6 @@
 # Builds any Go service in the repo:
 #   docker build --build-arg SERVICE=customer -t datastack/customer:dev .
-FROM golang:1.26-alpine AS build
+FROM golang:1.26.6-alpine AS build
 
 WORKDIR /src
 

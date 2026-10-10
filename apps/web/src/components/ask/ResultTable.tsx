@@ -2,7 +2,7 @@ import type { AskResponse, Cell } from "@/lib/types";
 import { isNumericColumn } from "./columns";
 
 function render(cell: Cell): React.ReactNode {
-  if (cell === null) return <span className="text-slate-500 italic">NULL</span>;
+  if (cell === null) return <span className="text-slate-400 italic">NULL</span>;
   if (typeof cell === "boolean") return cell ? "true" : "false";
   if (typeof cell === "number") return cell.toLocaleString("en-US", { maximumFractionDigits: 4 });
   return cell;
@@ -32,7 +32,7 @@ export function ResultTable({ result }: { result: AskResponse }) {
                 }`}
               >
                 {col.name}
-                <span className="ml-2 text-xs font-normal text-slate-400">{col.type}</span>
+                <span className="ml-2 text-sm font-normal text-slate-400">{col.type}</span>
               </th>
             ))}
           </tr>

@@ -85,7 +85,7 @@ Database `marketing`. Ad clicks and their conversions (Marketing Service): one r
 
 ### campaigns
 
-Database `marketing`. Marketing campaigns (Marketing Service): one row per campaign, identified by the pair (utm_source, utm_campaign), with its total ad spend. Join attributions on both utm_source and utm_campaign. ROAS for a campaign is the cleared revenue of its converted attributions divided by ad_spend, and CAC is ad_spend divided by the number of distinct converted customers. The organic/none row represents traffic that arrived without an ad.
+Database `marketing`. Marketing campaigns (Marketing Service): one row per campaign, identified by the pair (utm_source, utm_campaign), with its total ad spend. Join attributions on both utm_source and utm_campaign. ROAS for a campaign is the cleared revenue of its converted attributions divided by ad_spend, and CAC is ad_spend divided by the number of distinct converted customers. Both divide by ad_spend, which is a column rather than an aggregate, so group by utm_source, utm_campaign AND ad_spend. The organic/none row represents traffic that arrived without an ad.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
@@ -95,7 +95,7 @@ Database `marketing`. Marketing campaigns (Marketing Service): one row per campa
 | `deleted_at` | `timestamp with time zone` | yes | When the row was soft-deleted, in UTC. NULL for live rows. Filter on deleted_at IS NULL unless analysing deletions. |
 | `utm_source` | `character varying(100)` |  | Traffic source, the utm_source URL parameter: google, facebook, instagram, tiktok, email or organic. |
 | `utm_campaign` | `character varying(100)` |  | Campaign name, the utm_campaign URL parameter, such as summer_sale. Unique together with utm_source. |
-| `ad_spend` | `numeric(10,2)` |  | Total spend on this campaign so far, in USD. A lifetime total, not a daily amount. 0.00 for unpaid channels (email, organic). |
+| `ad_spend` | `numeric(10,2)` |  | Total spend on this campaign so far, in USD. A lifetime total, not a daily amount. 0.00 for unpaid channels (email, organic). A paid campaign is a row with ad_spend > 0: restrict to those for any question about paid campaigns, ROAS or acquisition cost, because the unpaid channels have no spend to divide by. |
 
 ### inventory
 
@@ -163,5 +163,5 @@ Database `orders`. Checkout attempts (Order Service): one row per checkout, fail
 | `quantity` | `bigint` |  | Number of units bought, 1 or more. |
 | `unit_price` | `numeric(10,2)` | yes | Price per unit in USD charged at checkout, copied from inventory.price. NULL if the checkout failed before stock was reserved. |
 | `total_amount` | `numeric(10,2)` | yes | Order value in USD: unit_price times quantity. NULL if the checkout failed before stock was reserved. Counts as revenue only when status is PAID or SHIPPED. |
-| `status` | `character varying(20)` |  | Lifecycle state: PENDING (checkout in progress), PAID (charged, shipment not yet requested), SHIPPED (charged and handed to fulfillment, see shipments.shipped_at for when the box left) or FAILED (see failure_reason). |
+| `status` | `character varying(20)` |  | Lifecycle state: PENDING (checkout in progress), PAID (charged, shipment not yet requested), SHIPPED (charged and handed to fulfillment, see shipments.shipped_at for when the box left) or FAILED (see failure_reason). A successful order is one that was charged, so status IN ('PAID', 'SHIPPED'): use that pair for success, revenue and order value. FAILED is the only unsuccessful end state and PENDING is still in flight. |
 | `failure_reason` | `character varying(50)` | yes | Why a FAILED checkout failed, NULL otherwise: CUSTOMER_INVALID (unknown customer), CUSTOMER_SUSPENDED, OUT_OF_STOCK, PRODUCT_NOT_FOUND, PAYMENT_DECLINED (see payments.decline_reason) or UPSTREAM_ERROR (a dependency was unavailable). |

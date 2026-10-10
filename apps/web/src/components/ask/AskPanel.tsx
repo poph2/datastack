@@ -153,7 +153,7 @@ export function AskPanel() {
                 </span>
               )}
               {models.status === "ready" && (
-                <span className="text-xs text-slate-500">via {models.data.provider}</span>
+                <span className="text-sm text-slate-400">via {models.data.provider}</span>
               )}
             </label>
             <div className="ml-auto flex gap-2">
@@ -207,7 +207,7 @@ export function AskPanel() {
         <Card className="flex flex-col gap-4">
           <ErrorBox title={ERROR_TITLES[error.error] ?? error.error}>
             <p className="whitespace-pre-wrap">{error.message}</p>
-            <p className="mt-1 font-mono text-xs text-rose-300/70">{error.error}</p>
+            <p className="mt-1 font-mono text-sm text-rose-300">{error.error}</p>
           </ErrorBox>
           {error.sql && (
             <div>

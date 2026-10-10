@@ -44,14 +44,14 @@ export function Sidebar() {
                 }`}
               >
                 <span className="block text-base font-semibold">{page.label}</span>
-                <span className="hidden text-xs text-slate-400 lg:block">{page.hint}</span>
+                <span className="hidden text-sm text-slate-400 lg:block">{page.hint}</span>
               </Link>
             );
           })}
         </nav>
 
         <div>
-          <h2 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <h2 className="mb-2 px-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
             Grafana
           </h2>
           <ul className="flex flex-wrap gap-1 lg:flex-col">
@@ -81,7 +81,7 @@ export function Sidebar() {
               </a>
             </li>
           </ul>
-          <p className="mt-3 px-3 text-xs text-slate-500">
+          <p className="mt-3 px-3 text-sm text-slate-400">
             Grafana at {grafanaUrl} (<code>make grafana</code>)
           </p>
         </div>

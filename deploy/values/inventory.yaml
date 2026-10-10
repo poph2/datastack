@@ -11,6 +11,12 @@ postgres:
 env:
   LOG_LEVEL: info
   LOG_FORMAT: json
-  RESTOCK_INTERVAL: 2m
+  # Every 30s, not minutes: a product that sells out stays out until the next
+  # run, so a slower loop makes OUT_OF_STOCK the demo's dominant failure even
+  # with healthy knobs. Measured at RATE=10: 2m gives a 76% checkout success
+  # rate with OUT_OF_STOCK swamping everything; 30s gives 90%, with declines
+  # (the 5% default) back as the main failure. The restock_paused knob and
+  # Drain stock still empty the shelves for the Act 3 stock-out scenario.
+  RESTOCK_INTERVAL: 30s
   RESTOCK_THRESHOLD: "10"
   RESTOCK_QUANTITY: "50"

@@ -66,7 +66,7 @@ export function SchemaBrowser() {
                 placeholder="Filter tables and columns"
                 className="w-64 rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
               />
-              <span className="text-xs text-slate-500">
+              <span className="text-sm text-slate-400">
                 {schema.tables.length} tables · loaded {new Date(schema.loaded_at).toLocaleTimeString()}
               </span>
             </div>
@@ -75,14 +75,14 @@ export function SchemaBrowser() {
                 <details key={t.name} className="rounded-lg border border-slate-800 bg-slate-950">
                   <summary className="cursor-pointer px-4 py-2">
                     <span className="font-mono font-semibold text-sky-300">{t.name}</span>
-                    <span className="ml-2 text-xs text-slate-500">{t.columns.length} columns</span>
+                    <span className="ml-2 text-sm text-slate-400">{t.columns.length} columns</span>
                     <p className="mt-1 line-clamp-2 text-sm text-slate-400">{t.comment}</p>
                   </summary>
                   <ul className="divide-y divide-slate-800 border-t border-slate-800 text-sm">
                     {t.columns.map((c) => (
                       <li key={c.name} className="px-4 py-2">
                         <span className="font-mono text-slate-100">{c.name}</span>
-                        <span className="ml-2 font-mono text-xs text-amber-300/80">{c.type}</span>
+                        <span className="ml-2 font-mono text-sm text-amber-300">{c.type}</span>
                         {c.comment && <p className="mt-0.5 text-slate-400">{c.comment}</p>}
                       </li>
                     ))}
@@ -93,7 +93,7 @@ export function SchemaBrowser() {
             {schema.joins.length > 0 && (
               <div className="mt-4">
                 <h3 className="mb-2 text-sm font-semibold text-slate-300">Joins</h3>
-                <ul className="flex flex-wrap gap-2 font-mono text-xs">
+                <ul className="flex flex-wrap gap-2 font-mono text-sm">
                   {schema.joins.map((j) => (
                     <li
                       key={`${j.from}-${j.to}`}

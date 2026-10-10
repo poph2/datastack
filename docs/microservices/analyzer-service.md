@@ -281,9 +281,7 @@ The Analyzer writes nothing. It reads all seven `analytics_db` tables and depend
 
 ## Eval Results
 
-Not measured yet: the evaluation needs the full stack with data loaded, and a machine where Ollama has a GPU. On a CPU-only 2019 Intel MacBook, `qwen2.5-coder` took ~120s to read the schema prompt once and ~3 tokens/s to write, so one question took minutes.
-
-Run it once the stack has been up under load for a while:
+Measured on the demo machine on 2026-10-09: Windows 11, Docker Desktop (12 CPUs, 62 GB), Ollama 0.40.2 on an **NVIDIA RTX 3060 12 GB**. With the GPU a question takes 0.2–4s, so the whole 20-case set runs in well under a minute.
 
 ```sh
 make eval                                          # default model
@@ -291,4 +289,32 @@ make eval EVAL_ARGS="--eval-model qwen3.5:9b"      # another model
 make eval EVAL_ARGS="--cases revenue_by_tier"      # one case
 ```
 
-Record the score per model here. For each failure, decide whether the model or the documentation is at fault before touching the prompt (see Analytics Impact).
+| Model | Score | Cases | Notes |
+|---|---|---|---|
+| `qwen2.5-coder:latest` (7B, the default) | **1.00** | 20/20 | Three consecutive runs scored 20/20, 19/20, 20/20. Every case answers in one attempt except ROAS and CAC, which take two |
+| `qwen3.5:9b` | **0.70** | 14/20 | A general model, not a coder model. Use the default on stage |
+
+### Run the eval with the load stopped
+
+**Scores are only meaningful on static data.** The comparison runs the generated query and the reference query seconds apart and requires the row count to match exactly, with a tolerance of ±0.01 absolute or 0.5% relative. Under `make load RATE=5` the totals move by more than that between the two queries, so correct SQL fails on value drift: a run under load scored 18/20 with `revenue_by_tier` failing on `[GOLD, 57433.90]` against identical SQL. Stop the load, wait for `curl localhost:8090/status` to show zero lag, then score:
+
+```sh
+make load-stop     # then wait for CDC lag to reach 0
+make eval
+make load RATE=5   # start the traffic again afterwards
+```
+
+### What the failures taught the documentation
+
+Three of the default model's four original failures were fixed where the handoff prefers — in the schema comments, not the prompt:
+
+- **`roas_per_campaign` and `cac_per_campaign`** returned 5 rows against the reference's 4. The `email` campaign has `ad_spend = 0.00` and 167 successful payments, and nothing defined what a *paid* campaign was. `campaigns.ad_spend` now says that a paid campaign is a row with `ad_spend > 0` and that questions about paid campaigns, ROAS or acquisition cost should restrict to those.
+- **`average_order_value`** answered `status = 'PAID'` for "successful orders", missing `SHIPPED`. `orders.status` now states that a successful order is one that was charged, `status IN ('PAID', 'SHIPPED')`, and that FAILED is the only unsuccessful end state.
+
+One failure was a genuine dialect rule, so it went into `rules` in [`prompt.go`](../../services/analyzer/internal/analyzer/prompt.go): dividing an aggregate by a grouped table's column (`SUM(p.amount) / c.ad_spend`) left that column out of `GROUP BY`, which StarRocks rejects with *"must be an aggregate expression or appear in GROUP BY clause"*. The rule states it for both operand orders, because the model fixed one shape and then made the same mistake with the operands reversed.
+
+### Remaining and known-flaky cases
+
+- **`time_to_ship_by_tier`** failed in one of three runs. Ollama at `temperature: 0` is not bit-deterministic, and this case has the model choosing whether to filter orders by status. It is the only case that has ever flipped between runs on the default model.
+- **`out_of_stock_products` and `top_products_by_revenue`** are structurally fragile, though they passed every run: the first reads `stock_level = 0`, which the restocker and live checkouts flip constantly, and the second compares a top-5 list `ordered: true` with no tie-break. Both are reliable only with the load stopped.
+- **`qwen3.5:9b`'s six failures** are its own SQL errors, not documentation gaps: a `WHERE` clause placed before a `JOIN` (`orders_per_country`), a missing `AVG()` with `GROUP BY 1` returning 33 rows (`avg_time_to_ship`), joining `payments` on `p.id = o.id` instead of `p.order_id` (`roas_per_campaign`, `cleared_revenue_by_source`), and ignoring the GROUP BY rule twice. Teaching the prompt around them would cost tokens for a model the demo does not use.
