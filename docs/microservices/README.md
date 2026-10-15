@@ -403,6 +403,8 @@ The Analyzer Service ([`services/analyzer`](../../services/analyzer), [analyzer-
 Make targets (every `kubectl`/`helm` call pins `--context kind-datastack`):
 
 ```sh
+make up                      # the whole stack, in dependency order (the next five, then load)
+make down                    # delete the cluster and everything in it
 make kind-up                 # create the kind cluster
 make infra                   # CNPG operator + Postgres cluster
 make analytics               # StarRocks (one all-in-one pod, ~3 GB)
@@ -416,7 +418,7 @@ make web                     # deploy the web UI and serve it on http://localhos
 make load RATE=10            # continuous k6 journeys inside the cluster; make load-stop scales k6 to zero
 make forward-order           # port-forward localhost:8080 (any service: forward-<name>)
 make status                  # pods and CNPG databases
-make up && make run-customer # local alternative: Postgres via docker compose + go run
+make compose-up && make run-customer # local alternative: Postgres via docker compose + go run
 ```
 
 Internal DNS names: `order-service`, `customer-service`, `marketing-service`, `inventory-service`, `payment-service`, `shipment-service`, `cdc-sync-service`, `analyzer-service`, `web`, `starrocks`, `datastack-pg-rw`, `otel-collector`, `tempo`, `prometheus`, `grafana`.

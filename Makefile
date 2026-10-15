@@ -35,18 +35,43 @@ OLLAMA_URL ?=
 # Journeys per second for `make load`.
 RATE ?= 5
 
-.PHONY: catalog catalog-migrate catalog-check up down reset test test-unit lint kind-up kind-down infra analytics deploy-all load load-stop status \
+.PHONY: catalog catalog-migrate catalog-check up down compose-up compose-down compose-reset test test-unit lint \
+        kind-up kind-ensure kind-down infra analytics deploy-all load load-stop status \
         observability dashboards dashboards-configmap grafana eval web web-image deploy-web forward-web
+
+## The whole stack, on kind
+
+# Brings up everything, in dependency order: the cluster, then Postgres and
+# StarRocks, then observability, then the workloads that depend on them, then
+# traffic. OLLAMA_URL and RATE pass straight through, e.g.
+#   make up OLLAMA_URL=http://10.0.0.5:11434 RATE=10
+#
+# Every step is idempotent, so a bring-up that failed half way can just be run
+# again. Expect about 20 minutes from nothing: StarRocks takes a minute or two
+# to come ready and the image builds dominate the rest.
+#
+# Port-forwards are deliberately not part of it, because they block the
+# terminal. Run them afterwards, in their own.
+up: kind-ensure infra analytics observability deploy-all load
+	@echo
+	@echo "Stack is up. In their own terminals:"
+	@echo "  make forward-web   # control center on http://localhost:3001"
+	@echo "  make grafana       # Grafana on http://localhost:3000"
+	@echo "Then check it with: make status"
+
+# Tears it all down again: deletes the kind cluster, and with it every
+# database, dashboard and image loaded into the node.
+down: kind-down
 
 ## Local Postgres (docker compose) for `go run` development
 
-up:
+compose-up:
 	$(COMPOSE) up -d --wait
 
-down:
+compose-down:
 	$(COMPOSE) down
 
-reset:
+compose-reset:
 	$(COMPOSE) down --volumes --remove-orphans
 	$(COMPOSE) up -d --wait
 
@@ -66,7 +91,7 @@ comma := ,
 
 # Migrates every service into the local Postgres, so their schema comments are
 # in place. Missing databases are created, so an older compose volume works too.
-catalog-migrate: up
+catalog-migrate: compose-up
 	@for db in $(CATALOG_DATABASES); do \
 		$(COMPOSE) exec -T postgres psql -U demo -d datastack -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1 \
 			|| $(COMPOSE) exec -T postgres psql -U demo -d datastack -qc "CREATE DATABASE $$db"; \
@@ -103,6 +128,15 @@ lint:
 
 kind-up:
 	kind create cluster --config deploy/kind/cluster.yaml
+
+# The same, but a no-op when the cluster is already there, so `make up` can be
+# re-run. `kind create cluster` fails on the second call.
+kind-ensure:
+	@if kind get clusters 2>/dev/null | tr -d '\r' | grep -qx '$(CLUSTER)'; then \
+		echo "kind cluster \"$(CLUSTER)\" already exists"; \
+	else \
+		$(MAKE) kind-up; \
+	fi
 
 kind-down:
 	kind delete cluster --name $(CLUSTER)

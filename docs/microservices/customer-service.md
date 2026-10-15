@@ -154,7 +154,7 @@ Every flag can also be set as an environment variable (`--tier-weights` ↔ `TIE
 
 ```sh
 # Local: Postgres in docker compose, service via go run
-make up
+make compose-up
 make run-customer                 # migrate, then serve on :8081
 
 # kind

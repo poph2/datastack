@@ -235,7 +235,7 @@ mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT status, COUNT(*) FROM analytics_db
 Locally, against the docker compose Postgres:
 
 ```sh
-make up                                    # Postgres on localhost:5433 (user demo/demo)
+make compose-up                                    # Postgres on localhost:5433 (user demo/demo)
 docker run -d --name starrocks -p 8030:8030 -p 9030:9030 -p 8040:8040 starrocks/allin1-ubuntu:3.3-latest
 PGUSER=demo PGPASSWORD=demo LOG_FORMAT=text go run ./services/cdc-sync serve
 ```

@@ -65,6 +65,9 @@ One Go module at the repo root (`github.com/poph2/datastack`), Go 1.26, one shar
 ## Running It
 
 ```sh
+make up                 # the whole stack in dependency order; idempotent, so re-run after a failure
+make down               # delete the kind cluster and everything in it
+
 make kind-up            # create the kind cluster
 make infra              # CloudNativePG operator + Postgres
 make analytics          # StarRocks (~3 GB of memory)
@@ -79,7 +82,7 @@ make forward-order      # any service on its own port: forward-<name>
 make status             # pods and databases
 ```
 
-Local development without kind: `make up` (Postgres in Docker Compose), then `make run-<service>`. The full kind stack needs a well-resourced machine (StarRocks alone takes ~3 GB). Don't bring it up on a small laptop. Ollama should run on a machine with a GPU.
+Local development without kind: `make compose-up` (Postgres in Docker Compose, with `compose-down` and `compose-reset`), then `make run-<service>`. The full kind stack needs a well-resourced machine (StarRocks alone takes ~3 GB). Don't bring it up on a small laptop. Ollama should run on a machine with a GPU.
 
 ## Rules for Assistants
 

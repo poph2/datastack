@@ -19,7 +19,7 @@ The full stack needs Docker with about 12 GB and 6 CPUs; see the
 [demo runbook](docs/demo-runbook.md). For most changes you don't need the cluster at all:
 
 ```sh
-make up              # just Postgres, in Docker Compose
+make compose-up      # just Postgres, in Docker Compose
 make run-customer    # run one service against it
 make test            # everything, including testcontainers-backed repository tests
 make test-unit       # the same, minus anything that needs Docker

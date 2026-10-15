@@ -36,12 +36,22 @@ kubectl --context kind-datastack run ollama-probe --rm -i --restart=Never --imag
 
 ## 3. Bring-up (about 15 minutes the first time)
 
+One target does the whole thing, in order (omit `OLLAMA_URL` on Docker Desktop):
+
+```sh
+make up OLLAMA_URL=<url> RATE=5
+```
+
+Every step is idempotent, so if one fails — a chart download times out, a rollout is slow — fix it
+and run `make up` again rather than starting over. The steps, if you would rather drive them one at
+a time or need to repeat just one:
+
 ```sh
 make kind-up                                  # kind cluster "datastack"
 make infra                                    # CloudNativePG + Postgres
 make analytics                                # StarRocks (takes 1–2 minutes to become ready)
 make observability                            # OTel Collector, Tempo, Prometheus, Grafana + dashboards
-make deploy-all OLLAMA_URL=<url>              # 6 services, CDC sync, analyzer, web UI (omit OLLAMA_URL on Docker Desktop)
+make deploy-all OLLAMA_URL=<url>              # 6 services, CDC sync, analyzer, web UI
 make load RATE=5                              # k6 traffic
 ```
 

@@ -224,7 +224,7 @@ The original spec's `PACKING_WORKERS`, `PACKING_QUEUE_SIZE` and `GOLD_PRIORITY` 
 ## Running It
 
 ```sh
-make up && make run-shipment      # local Postgres + go run on :8085
+make compose-up && make run-shipment      # local Postgres + go run on :8085
 make deploy-shipment              # kind (after make kind-up infra)
 make forward-shipment             # localhost:8085
 

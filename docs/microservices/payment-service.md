@@ -221,7 +221,7 @@ Every flag can also be set as an environment variable (`--failure-rate` ↔ `FAI
 ## Running It
 
 ```sh
-make up && make run-payment     # local Postgres + go run on :8084
+make compose-up && make run-payment     # local Postgres + go run on :8084
 make deploy-payment             # kind (after make kind-up infra)
 make forward-payment            # localhost:8084
 

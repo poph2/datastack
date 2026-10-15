@@ -122,19 +122,23 @@ where a question takes a second or two instead of minutes.
 ```sh
 ollama pull qwen2.5-coder
 
-make kind-up        # create the cluster
-make infra          # CloudNativePG + Postgres
-make analytics      # StarRocks
-make observability  # Collector, Tempo, Prometheus, Grafana + dashboards
-make deploy-all     # six services, CDC, analyzer, web UI
-make load RATE=10   # start the traffic
+make up             # the whole stack, in order. About 20 minutes from nothing
+```
 
-make web            # the control center on http://localhost:3001
+That is: create the kind cluster, install CloudNativePG and Postgres, StarRocks, the observability
+stack, build and deploy the eight Go workloads and the web UI, and start the traffic. Every step is
+idempotent, so a bring-up interrupted half way can just be run again. If Ollama isn't reachable at
+`host.docker.internal`, pass its address: `make up OLLAMA_URL=http://10.0.0.5:11434`.
+
+Then, in two more terminals, because port-forwards block:
+
+```sh
+make forward-web    # the control center on http://localhost:3001
 make grafana        # Grafana on http://localhost:3000
 ```
 
-Then open <http://localhost:3001> and ask it something. `make eval` scores the analyzer against the
-20 reference questions; `make kind-down` deletes everything.
+Open <http://localhost:3001> and ask it something. `make eval` scores the analyzer against the
+20 reference questions; `make down` deletes the cluster and everything in it.
 
 Full bring-up, the pre-flight checklist and a complete demo script are in the
 **[demo runbook](docs/demo-runbook.md)**.

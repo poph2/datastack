@@ -206,7 +206,7 @@ Every flag can also be set as an environment variable (`--restock-interval` ↔ 
 ## Running It
 
 ```sh
-make up && make run-inventory     # local Postgres + go run on :8083
+make compose-up && make run-inventory     # local Postgres + go run on :8083
 make deploy-inventory             # kind (after make kind-up infra)
 make forward-inventory            # localhost:8083
 

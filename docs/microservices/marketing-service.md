@@ -203,7 +203,7 @@ Helm values: [`deploy/values/marketing.yaml`](../../deploy/values/marketing.yaml
 ## Running It
 
 ```sh
-make up && make run-marketing     # local Postgres + go run on :8082
+make compose-up && make run-marketing     # local Postgres + go run on :8082
 make deploy-marketing             # kind (after make kind-up infra)
 make forward-marketing            # localhost:8082
 
@@ -213,7 +213,7 @@ curl -XPUT localhost:8082/attributions/1/order -H 'content-type: application/jso
   -d '{"order_id":999,"order_amount":"150.00"}'
 ```
 
-The `*-marketing` targets are the Makefile's generic `run-%`/`deploy-%`/`forward-%` rules. They need `marketing:marketing` in `SERVICE_DATABASES` and `marketing:8082` in `SERVICE_PORTS` (plus a local `marketing` database for `make up`).
+The `*-marketing` targets are the Makefile's generic `run-%`/`deploy-%`/`forward-%` rules. They need `marketing:marketing` in `SERVICE_DATABASES` and `marketing:8082` in `SERVICE_PORTS` (plus a local `marketing` database for `make compose-up`).
 
 ## Telemetry
 
