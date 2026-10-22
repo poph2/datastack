@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  python-benchmark:
+    image: python:3.11-slim
+    volumes:
+      - ./py:/app
+    working_dir: /app
+    command: ["python", "benchmark.py"]
+
+  go-benchmark:
+    image: golang:1.26-alpine
+    volumes:
+      - ./go:/app
+    working_dir: /app
+    command: sh -c "GO111MODULE=off go build -o go_bench main.go && ./go_bench"
+    depends_on:
+      python-benchmark:
+        condition: service_completed_successfully
+
+  rust-benchmark:
+    image: rust:latest
+    volumes:
+      - ./rust:/app
+    working_dir: /app
+    command: sh -c "rustc -O main.rs && ./main"
+    depends_on:
+      go-benchmark:
+        condition: service_completed_successfully
+  
+  cpp-benchmark:
+    image: gcc:latest
+    volumes:
+      - ./cpp:/app
+    working_dir: /app
+    command: sh -c "g++ -O3 -std=c++17 main.cpp -o cpp_bench -fsized-deallocation && ./cpp_bench"
+    depends_on:
+      rust-benchmark:
+        condition: service_completed_successfully
+
+  c-benchmark:
+    image: gcc:latest
+    volumes:
+      - ./c:/app
+    working_dir: /app
+    command: sh -c "gcc -O3 main.c -o c_bench && ./c_bench"
+    depends_on:
+      cpp-benchmark:
+        condition: service_completed_successfully
+  

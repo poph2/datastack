@@ -37,7 +37,8 @@ RATE ?= 5
 
 .PHONY: catalog catalog-migrate catalog-check up down compose-up compose-down compose-reset test test-unit lint \
         kind-up kind-ensure kind-down infra analytics deploy-all load load-stop status \
-        observability dashboards dashboards-configmap grafana eval web web-image deploy-web forward-web
+        observability dashboards dashboards-configmap grafana eval web web-image deploy-web forward-web \
+        benchmark
 
 ## The whole stack, on kind
 
@@ -251,3 +252,6 @@ load-stop:
 
 status:
 	$(KUBECTL) get pods,databases.postgresql.cnpg.io
+
+benchmark:
+	cd ./benchmark && ./run_benchmark.sh

@@ -1,0 +1,6 @@
+benchmark/go/go_bench
+benchmark/cpp/cpp_bench
+benchmark/c/c_bench
+benchmark/rust/main
+benchmark_raw.log
+.tmp-deck/
