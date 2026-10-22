@@ -49,19 +49,21 @@ tempo:
       metrics_generator:
         processors: [service-graphs, span-metrics]
 
-  # 640Mi was not enough: Tempo was OOMKilled five times in a three-hour
-  # rehearsal at 10-15 journeys a second, which blanks the service map and the
-  # "View trace" links mid-demo. It also runs the metrics_generator above, whose
-  # service-graph and span-metrics processors hold their own state. The 2h
-  # retention above is the other half of the fix; on 24h it still grew out of
-  # 1536Mi after about 70 minutes.
+  # 4Gi. Tempo blanks the service map and the "View trace" links whenever it is
+  # killed, so this is the one observability pod worth over-provisioning. The
+  # history: 640Mi lasted minutes, 1536Mi with 24h retention lasted about 70,
+  # and 1536Mi with the 2h retention above still OOMKilled 11 times in seven
+  # days. Sampling RSS every five minutes never caught it above 246 MiB, so it
+  # is a burst - compaction is the suspect - rather than steady growth, and the
+  # fix is headroom for the burst, not a lower steady state. The demo machine
+  # has it spare.
   resources:
     requests:
       cpu: 50m
       memory: 256Mi
     limits:
       cpu: 500m
-      memory: 1536Mi
+      memory: 4Gi
 
 # Local storage on the pod (emptyDir). Traces live 24h at most anyway.
 persistence:

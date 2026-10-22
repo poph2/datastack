@@ -4,9 +4,9 @@ How to bring DataStack up on the demo machine, check it is healthy, and run the 
 
 ## 1. Machine
 
-The whole stack runs on one kind node. The resource limits add up to about 10 GB of memory, StarRocks alone is 4 GB, and the working set under load is about 5–6 GB. Plan for:
+The whole stack runs on one kind node. The resource limits add up to about 17 GB of memory, StarRocks alone is 8 GB, and the working set under load is about 5–6 GB — the limits are deliberately generous because the two components that OOMKill (StarRocks and Tempo) burst rather than creep. Plan for:
 
-- **Docker:** at least 12 GB of memory and 6 CPUs for the Docker VM (or for the host, on Linux). Don't shave StarRocks' 4 GB: on its old 3 GB limit it was OOMKilled both by k6 at 20 journeys a second and by the seven dashboards refreshing together, and losing that pod takes every business dashboard and the analyzer down for about two minutes.
+- **Docker:** at least 20 GB of memory and 6 CPUs for the Docker VM (or for the host, on Linux). Don't shave StarRocks' 8 GB: at 3 GB it was OOMKilled by k6 at 20 journeys a second and by the dashboards refreshing together, and even at 4 GB it was killed 35 times in seven days with a working set of 4,038 MiB. Losing that pod blanks every business dashboard and the analyzer for about two minutes. Tempo has the same shape of problem and now has 4 GB.
 - **Ollama:** outside the cluster, on this machine or another one, ideally with a GPU. On a CPU, `qwen2.5-coder` (7B) needs minutes to read the ~3k-token schema prompt the first time and writes about 3 tokens a second. With a GPU, a question takes a few seconds.
 - **Tools:** Docker, kind, kubectl, helm, Go 1.26, make.
 

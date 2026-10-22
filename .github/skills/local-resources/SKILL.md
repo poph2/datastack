@@ -26,10 +26,10 @@ Every container on the kind cluster has `resources.requests` and `resources.limi
 | Analyzer | 25m / 32Mi | 250m / 128Mi | `deploy/values/analyzer.yaml` (waits on the LLM; result sets are capped) |
 | Web UI (Next.js) | 25m / 96Mi | 500m / 256Mi | `deploy/web/deployment.yaml` |
 | Postgres (CNPG, all six databases) | 100m / 256Mi | 1 CPU / 1Gi | `deploy/infra/postgres.yaml` |
-| StarRocks (FE + BE, one pod) | 500m / 2Gi | 2 CPU / 4Gi | `deploy/infra/starrocks.yaml` (3Gi was OOMKilled by 20 journeys/s, and by the 44 dashboard panels refreshing together) |
+| StarRocks (FE + BE, one pod) | 500m / 3Gi | 2 CPU / 8Gi | `deploy/infra/starrocks.yaml` (4Gi still OOMKilled 35 times in seven days, working set 4,038 MiB) |
 | k6 | 100m / 64Mi | 1 CPU / 256Mi | `deploy/k6/deployment.yaml` |
 | OTel Collector | 25m / 64Mi | 500m / 192Mi | `deploy/observability/otel-collector.yaml` |
-| Tempo | 50m / 256Mi | 500m / 1536Mi | `deploy/observability/tempo.yaml` (640Mi was OOMKilled repeatedly above ~10 journeys/s; it also runs the metrics generator) |
+| Tempo | 50m / 256Mi | 500m / 4Gi | `deploy/observability/tempo.yaml` (1536Mi still OOMKilled 11 times in seven days; it bursts, it does not creep) |
 | Prometheus (+ config reloader 5m / 16Mi) | 50m / 256Mi | 500m / 768Mi | `deploy/observability/prometheus.yaml` |
 | Grafana | 50m / 128Mi | 500m / 384Mi | `deploy/observability/grafana.yaml` |
 

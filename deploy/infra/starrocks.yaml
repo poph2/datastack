@@ -64,19 +64,23 @@ spec:
               containerPort: 9030
             - name: be-http
               containerPort: 8040
-          # 4Gi, not 3Gi: FE, BE and broker share this one container, and 3Gi
-          # was OOMKilled twice in one rehearsal - once by k6 at 20 journeys a
-          # second, and once by the dashboards' 44 StarRocks panels refreshing
-          # close together, which is what happens when two DataStack dashboards
-          # are left open on stage. Losing this pod takes out every business
-          # dashboard and the analyzer for about two minutes.
+          # 8Gi. FE, BE and broker share this one container. 3Gi was OOMKilled
+          # twice in one rehearsal - once by k6 at 20 journeys a second, once by
+          # the dashboards' 44 StarRocks panels refreshing close together. 4Gi
+          # was no better over a longer run: 35 OOMKills in seven days, about
+          # one every five hours, with the working set sitting at 4,038 MiB -
+          # right against the limit. Losing this pod blanks every business
+          # dashboard and the analyzer for about two minutes, which is fatal
+          # mid-recording and bad on stage. The demo machine has 62Gi
+          # allocatable and the whole stack commits ~10Gi, so the headroom is
+          # free; take it.
           resources:
             requests:
               cpu: 500m
-              memory: 2Gi
+              memory: 3Gi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 8Gi
           # FE and BE take about a minute to come up and register with each
           # other; allow up to 5 minutes before the kubelet gives up.
           startupProbe:
